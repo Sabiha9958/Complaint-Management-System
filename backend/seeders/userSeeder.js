@@ -1,176 +1,116 @@
-/**
- * User Seeder
- * Seeds default admin and staff users with proper email addresses
- */
-
-const mongoose = require("mongoose");
-const User = require("../models/User");
-const connectDB = require("../config/db");
-require("dotenv").config();
-
-// Default user credentials with proper email addresses
-const defaultUsers = [
-  {
-    name: "System Administrator",
-    email: "admin@complaintportal.com",
-    password: "Admin@2024",
-    role: "admin",
-    department: "Administration",
-    phone: "9876543210",
-    isActive: true,
-  },
-  {
-    name: "John Martinez",
-    email: "john.martinez@complaintportal.com",
-    password: "Staff@2024",
-    role: "staff",
-    department: "Customer Support",
-    phone: "9876543211",
-    isActive: true,
-  },
-  {
-    name: "Sarah Johnson",
-    email: "sarah.johnson@complaintportal.com",
-    password: "Staff@2024",
-    role: "staff",
-    department: "Technical Support",
-    phone: "9876543212",
-    isActive: true,
-  },
-  {
-    name: "Michael Chen",
-    email: "michael.chen@complaintportal.com",
-    password: "Staff@2024",
-    role: "staff",
-    department: "IT Services",
-    phone: "9876543213",
-    isActive: true,
-  },
-  {
-    name: "Emily Williams",
-    email: "emily.williams@complaintportal.com",
-    password: "Staff@2024",
-    role: "staff",
-    department: "Facility Management",
-    phone: "9876543214",
-    isActive: true,
-  },
-  {
-    name: "Test User",
-    email: "user@example.com",
-    password: "User@2024",
-    role: "user",
-    department: null,
-    phone: "9876543215",
-    isActive: true,
-  },
-];
+const bcrypt = require("bcryptjs");
+const { faker } = require("@faker-js/faker");
+const logger = require("../utils/logger");
+const User = require("../models/UserModel");
 
 /**
- * Seed users into database
+ * Hash a plain password using bcrypt
+ * @param {string} plainPassword
+ * @returns {Promise<string>} hashed password
  */
-const seedUsers = async () => {
+const hashPassword = async (plainPassword) => {
+  const saltRounds = Number(process.env.BCRYPT_SALT_ROUNDS) || 12;
+  return bcrypt.hash(plainPassword, saltRounds);
+};
+
+/**
+ * Generate fake users with a given role
+ * @param {number} count - Number of users to generate
+ * @param {string} role - Role to assign (default: "user")
+ * @returns {Promise<Array>} Array of user objects
+ */
+const generateUsers = async (count, role = "user") => {
+  const users = [];
+  for (let i = 0; i < count; i++) {
+    users.push({
+      name: faker.person.fullName(),
+      email: faker.internet.email().toLowerCase(),
+      password: await hashPassword("Password@123"), // default password
+      role,
+      isEmailVerified: true,
+      phone: faker.string.numeric(10), // Always 10 digits
+    });
+  }
+  return users;
+};
+
+/**
+ * Import (seed) user data into the database
+ */
+const importData = async () => {
   try {
-    await connectDB();
+    await User.deleteMany();
 
-    console.log("\n" + "=".repeat(70));
-    console.log("🌱 COMPLAINT MANAGEMENT SYSTEM - USER SEEDER");
-    console.log("=".repeat(70) + "\n");
+    // Base admin and staff accounts
+    const baseUsers = [
+      {
+        name: "Zikaullah",
+        email: "zikaullah@gmail.com",
+        password: await hashPassword("Admin@123"),
+        role: "admin",
+        isEmailVerified: true,
+        phone: "9876543210",
+      },
+      {
+        name: "Kef Khan",
+        email: "kefkhan@gmail.com",
+        password: await hashPassword("Staff@123"),
+        role: "staff",
+        isEmailVerified: true,
+        phone: "9876543211",
+      },
+      {
+        name: "Madhu Kumari",
+        email: "madhukumari@gmail.com",
+        password: await hashPassword("Staff@123"),
+        role: "staff",
+        isEmailVerified: true,
+        phone: "9876543212",
+      },
+    ];
 
-    let createdCount = 0;
-    let skippedCount = 0;
-    const createdUsers = [];
+    // Random test users
+    const randomUsers = await generateUsers(20, "user");
 
-    for (const userData of defaultUsers) {
-      const existingUser = await User.findOne({ email: userData.email });
+    const allUsers = [...baseUsers, ...randomUsers];
+    await User.insertMany(allUsers);
 
-      if (existingUser) {
-        console.log(
-          `⚠️  Skipped: ${userData.email.padEnd(40)} (Already exists)`
-        );
-        skippedCount++;
-      } else {
-        await User.create(userData);
-        createdUsers.push(userData);
-        console.log(
-          `✅ Created: ${userData.email.padEnd(
-            40
-          )} [${userData.role.toUpperCase()}]`
-        );
-        createdCount++;
-      }
-    }
-
-    console.log("\n" + "=".repeat(70));
-    console.log("📊 SEEDING SUMMARY");
-    console.log("=".repeat(70));
-    console.log(`✅ Successfully Created: ${createdCount} user(s)`);
-    console.log(`⚠️  Skipped (Existing): ${skippedCount} user(s)`);
-    console.log(`📈 Total Processed: ${defaultUsers.length} user(s)`);
-    console.log("=".repeat(70) + "\n");
-
-    if (createdCount > 0) {
-      console.log("📋 DEFAULT LOGIN CREDENTIALS");
-      console.log("=".repeat(70));
-      console.log("\n🔐 ADMIN ACCOUNT:\n");
-      const admin = createdUsers.find((u) => u.role === "admin");
-      if (admin) {
-        console.log(`   Name:       ${admin.name}`);
-        console.log(`   Email:      ${admin.email}`);
-        console.log(`   Password:   ${admin.password}`);
-        console.log(`   Role:       ${admin.role.toUpperCase()}`);
-        console.log(`   Department: ${admin.department}`);
-      }
-
-      const staffUsers = createdUsers.filter((u) => u.role === "staff");
-      if (staffUsers.length > 0) {
-        console.log("\n👥 STAFF ACCOUNTS:\n");
-        staffUsers.forEach((staff, index) => {
-          console.log(`   ${index + 1}. ${staff.name}`);
-          console.log(`      Email:      ${staff.email}`);
-          console.log(`      Password:   ${staff.password}`);
-          console.log(`      Department: ${staff.department}\n`);
-        });
-      }
-
-      const regularUsers = createdUsers.filter((u) => u.role === "user");
-      if (regularUsers.length > 0) {
-        console.log("👤 USER ACCOUNTS:\n");
-        regularUsers.forEach((user, index) => {
-          console.log(`   ${index + 1}. ${user.name}`);
-          console.log(`      Email:    ${user.email}`);
-          console.log(`      Password: ${user.password}\n`);
-        });
-      }
-
-      console.log("=".repeat(70));
-      console.log("⚠️  SECURITY WARNING:");
-      console.log(
-        "   • Change these default passwords immediately after first login!"
-      );
-      console.log(
-        "   • Use the '/api/auth/change-password' endpoint to update passwords."
-      );
-      console.log(
-        "   • Never commit .env files or credentials to version control."
-      );
-      console.log("=".repeat(70) + "\n");
-    }
-
-    console.log("✨ Seeding completed successfully!\n");
-    process.exit(0);
+    logger.info(`✅ Successfully seeded ${allUsers.length} users`);
   } catch (error) {
-    console.error("\n❌ SEEDING ERROR:");
-    console.error("=".repeat(70));
-    console.error(error);
-    console.error("=".repeat(70) + "\n");
+    logger.error("❌ Error seeding users:", error);
     process.exit(1);
   }
 };
 
-// Execute seeder
+/**
+ * Destroy all users from the database
+ */
+const destroyData = async () => {
+  try {
+    const result = await User.deleteMany();
+    logger.warn(`⚠️ All users destroyed (count: ${result.deletedCount})`);
+  } catch (error) {
+    logger.error("❌ Error destroying users:", error);
+    process.exit(1);
+  }
+};
+
+// CLI runner
 if (require.main === module) {
-  seedUsers();
+  const arg = process.argv[2];
+  switch (arg) {
+    case "-i":
+      importData();
+      break;
+    case "-d":
+      destroyData();
+      break;
+    default:
+      logger.info(
+        "Usage: node seeders/userSeeder.js -i (import) | -d (destroy)"
+      );
+      process.exit(0);
+  }
 }
 
-module.exports = seedUsers;
+module.exports = { importData, destroyData };

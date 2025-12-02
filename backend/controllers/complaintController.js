@@ -1,786 +1,760 @@
+// src/controllers/complaintController.js
+
 /**
  * Complaint Controller
- * Handles all complaint-related operations with comprehensive error handling
+ * Handles complaint creation, updates, file attachments, stats, comments.
  */
 
-const Complaint = require("../models/Complaint");
-const StatusHistory = require("../models/StatusHistory");
-const { deleteFile, deleteMultipleFiles } = require("../utils/fileUpload");
-const fs = require("fs").promises;
+const fs = require("fs");
 const path = require("path");
+const { StatusCodes } = require("http-status-codes");
+const Complaint = require("../models/Complaint");
+const logger = require("../utils/logger");
 
-/**
- * @desc    Create new complaint
- * @route   POST /api/complaints
- * @access  Public/Private (depending on configuration)
- */
-exports.createComplaint = async (req, res) => {
+// WebSocket broadcast helper (make sure the file is named websocket/index.js)
+const { broadcast } = require("../websoket");
+
+/* ========================================================================
+ * 🔧 Helper utilities
+ * ===================================================================== */
+
+// Generic error sender
+const sendErrorResponse = (res, status, message) => {
+  return res.status(status).json({ success: false, message });
+};
+
+// Cleanup uploaded files from disk
+const cleanupFiles = (files) => {
+  if (!Array.isArray(files)) return;
+  files.forEach((file) => {
+    try {
+      if (file?.path && fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+    } catch (err) {
+      logger.warn(`Failed to cleanup file: ${file?.path}`, err);
+    }
+  });
+};
+
+// Safe WebSocket broadcast wrapper
+const broadcastComplaintEvent = (type, complaint, extra = {}) => {
   try {
-    const { title, description, category, priority, contactInfo } = req.body;
+    const payload =
+      complaint && typeof complaint.toObject === "function"
+        ? complaint.toObject()
+        : complaint;
 
-    // Validate contact information
-    if (!contactInfo || !contactInfo.name || !contactInfo.email) {
-      return res.status(400).json({
-        success: false,
-        message: "Contact information (name and email) is required",
-      });
-    }
-
-    // Create complaint with auto-generated ID
-    const complaint = await Complaint.create({
-      title,
-      description,
-      category,
-      priority: priority || "Medium",
-      contactInfo,
-      createdBy: req.user?._id || null, // Optional user ID if authenticated
+    broadcast({
+      type,
+      data: {
+        ...payload,
+        ...extra,
+      },
+      timestamp: new Date().toISOString(),
     });
-
-    // Create initial status history entry
-    await StatusHistory.create({
-      complaintId: complaint._id,
-      previousStatus: "None",
-      newStatus: "Pending",
-      changedBy: req.user?._id || complaint._id,
-      notes: "Complaint created and submitted",
-    });
-
-    // Populate created complaint data
-    const populatedComplaint = await Complaint.findById(complaint._id)
-      .populate("createdBy", "name email")
-      .populate("assignedTo", "name email department");
-
-    res.status(201).json({
-      success: true,
-      message: "Complaint submitted successfully",
-      data: populatedComplaint,
-    });
-  } catch (error) {
-    console.error("Create Complaint Error:", error);
-
-    // Handle validation errors
-    if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map((err) => err.message);
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: messages,
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: "Error creating complaint",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+  } catch (err) {
+    logger.warn(
+      `Failed to broadcast complaint event "${type}" for ${complaint?._id}:`,
+      err.message
+    );
   }
 };
 
-/**
- * @desc    Get all complaints with advanced filtering, search, and pagination
- * @route   GET /api/complaints
- * @access  Private (Staff/Admin)
- */
-exports.getAllComplaints = async (req, res) => {
+/* ========================================================================
+ * 📝 Create complaint  | POST /api/complaints
+ * ===================================================================== */
+
+const createComplaint = async (req, res) => {
+  try {
+    if (!req.user || !req.user._id) {
+      cleanupFiles(req.files);
+      return sendErrorResponse(
+        res,
+        StatusCodes.UNAUTHORIZED,
+        "User not authenticated."
+      );
+    }
+
+    let { title, description, category, priority, contactInfo } = req.body;
+
+    if (!title?.trim() || !description?.trim()) {
+      cleanupFiles(req.files);
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Title and description are required."
+      );
+    }
+
+    // Parse contactInfo if sent as JSON (FormData)
+    if (typeof contactInfo === "string") {
+      try {
+        contactInfo = JSON.parse(contactInfo);
+      } catch {
+        cleanupFiles(req.files);
+        return sendErrorResponse(
+          res,
+          StatusCodes.BAD_REQUEST,
+          "Invalid contact info format."
+        );
+      }
+    }
+
+    // Fallback contact info from user
+    if (!contactInfo) {
+      contactInfo = {
+        name: req.user.name || "",
+        email: req.user.email || "",
+        phone: req.user.phone || "",
+      };
+    }
+
+    if (!contactInfo.name?.trim() || !contactInfo.email?.trim()) {
+      cleanupFiles(req.files);
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Contact name and email are required."
+      );
+    }
+
+    const baseUrl =
+      process.env.BASE_URL || `${req.protocol}://${req.get("host")}`;
+
+    const complaintData = {
+      title: title.trim(),
+      description: description.trim(),
+      category: category?.trim() || "other",
+      priority: priority?.trim() || "medium",
+      user: req.user._id,
+      contactInfo: {
+        name: contactInfo.name.trim(),
+        email: contactInfo.email.trim().toLowerCase(),
+        phone: contactInfo.phone?.trim() || "",
+      },
+      status: "pending",
+      attachments: [],
+    };
+
+    // Attachments from Multer
+    if (Array.isArray(req.files) && req.files.length > 0) {
+      complaintData.attachments = req.files.map((file) => ({
+        filename: file.filename,
+        originalName: file.originalname,
+        url: `${baseUrl}/uploads/complaints/${file.filename}`,
+        path: file.path,
+        mimetype: file.mimetype,
+        size: file.size,
+        uploadedAt: new Date(),
+      }));
+    }
+
+    const complaint = await Complaint.create(complaintData);
+    await complaint.populate("user", "name email role avatar");
+
+    logger.info(
+      `Complaint created by ${req.user.email} (ID: ${complaint._id}) with ${complaintData.attachments.length} attachment(s)`
+    );
+
+    // WebSocket: notify dashboards
+    broadcastComplaintEvent("NEW_COMPLAINT", complaint);
+
+    return res.status(StatusCodes.CREATED).json({
+      success: true,
+      message: "Complaint submitted successfully.",
+      data: complaint,
+      complaintId: complaint._id,
+    });
+  } catch (error) {
+    if (error.name === "ValidationError") {
+      cleanupFiles(req.files);
+      logger.error("Create complaint validation error:", error);
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        error.message || "Invalid complaint data."
+      );
+    }
+
+    cleanupFiles(req.files);
+    logger.error("Create complaint error:", error);
+    return sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to create complaint."
+    );
+  }
+};
+
+/* ========================================================================
+ * 📋 Get complaints (all) | GET /api/complaints
+ * ===================================================================== */
+
+const getComplaints = async (req, res) => {
   try {
     const {
+      page = 1,
+      limit = 20,
       status,
       category,
       priority,
+      department,
       search,
-      page = 1,
-      limit = 10,
-      sortBy = "createdAt",
-      sortOrder = "desc",
-      assignedTo,
-      dateFrom,
-      dateTo,
+      sortBy = "-createdAt",
     } = req.query;
 
-    // Build query object
     const query = {};
 
-    // Filter by status
-    if (status) {
-      query.status = status;
-    }
+    // IMPORTANT: allow all authenticated users to see all complaints
+    // (My complaints page still uses /api/complaints/my)
+    // If you ever want "only mine" from this route, add scope=mine handling.
 
-    // Filter by category
-    if (category) {
-      query.category = category;
-    }
+    if (status) query.status = status;
+    if (category) query.category = category;
+    if (priority) query.priority = priority;
+    if (department) query.department = department;
 
-    // Filter by priority
-    if (priority) {
-      query.priority = priority;
-    }
-
-    // Filter by assigned staff
-    if (assignedTo) {
-      query.assignedTo = assignedTo;
-    }
-
-    // Date range filter
-    if (dateFrom || dateTo) {
-      query.createdAt = {};
-      if (dateFrom) {
-        query.createdAt.$gte = new Date(dateFrom);
-      }
-      if (dateTo) {
-        query.createdAt.$lte = new Date(dateTo);
-      }
-    }
-
-    // Text search across multiple fields
     if (search) {
+      const regex = new RegExp(search, "i");
       query.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { description: { $regex: search, $options: "i" } },
-        { complaintId: { $regex: search, $options: "i" } },
-        { "contactInfo.name": { $regex: search, $options: "i" } },
-        { "contactInfo.email": { $regex: search, $options: "i" } },
+        { title: regex },
+        { description: regex },
+        { "contactInfo.name": regex },
+        { "contactInfo.email": regex },
       ];
     }
 
-    // Role-based filtering: Users can only see their own complaints
-    if (req.user && req.user.role === "user") {
-      query.createdBy = req.user._id;
-    }
-
-    // Calculate pagination
     const pageNum = parseInt(page, 10);
     const limitNum = parseInt(limit, 10);
     const skip = (pageNum - 1) * limitNum;
 
-    // Sort configuration
-    const sort = {};
-    sort[sortBy] = sortOrder === "asc" ? 1 : -1;
+    const [complaints, total] = await Promise.all([
+      Complaint.find(query)
+        .populate("user", "name email role avatar")
+        .populate("assignedTo", "name email role")
+        .sort(sortBy)
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      Complaint.countDocuments(query),
+    ]);
 
-    // Execute query with population
-    const complaints = await Complaint.find(query)
-      .populate("assignedTo", "name email department role")
-      .populate("createdBy", "name email")
-      .sort(sort)
-      .limit(limitNum)
-      .skip(skip)
-      .lean(); // Use lean for better performance
-
-    // Get total count for pagination
-    const total = await Complaint.countDocuments(query);
-
-    // Calculate statistics
-    const stats = {
+    res.status(StatusCodes.OK).json({
+      success: true,
+      count: complaints.length,
       total,
-      pending: await Complaint.countDocuments({ ...query, status: "Pending" }),
-      inProgress: await Complaint.countDocuments({
-        ...query,
-        status: "In Progress",
-      }),
-      resolved: await Complaint.countDocuments({
-        ...query,
-        status: "Resolved",
-      }),
-    };
-
-    res.status(200).json({
-      success: true,
-      count: complaints.length,
-      pagination: {
-        total,
-        totalPages: Math.ceil(total / limitNum),
-        currentPage: pageNum,
-        limit: limitNum,
-        hasNextPage: pageNum * limitNum < total,
-        hasPrevPage: pageNum > 1,
-      },
-      stats,
+      page: pageNum,
+      pages: Math.ceil(total / limitNum),
       data: complaints,
     });
   } catch (error) {
-    console.error("Get All Complaints Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error fetching complaints",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+    logger.error("Get complaints error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to fetch complaints."
+    );
   }
 };
 
-/**
- * @desc    Get single complaint by ID with status history
- * @route   GET /api/complaints/:id
- * @access  Private
- */
-exports.getComplaintById = async (req, res) => {
+/* ========================================================================
+ * 👤 Get my complaints | GET /api/complaints/my
+ * ===================================================================== */
+
+const getMyComplaints = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { status, sortBy = "-createdAt" } = req.query;
 
-    // Validate MongoDB ObjectId
-    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid complaint ID format",
-      });
-    }
+    const query = { user: req.user._id };
+    if (status) query.status = status;
 
-    // Find complaint with populated fields
-    const complaint = await Complaint.findById(id)
-      .populate("assignedTo", "name email department role phone")
-      .populate("createdBy", "name email phone");
-
-    if (!complaint) {
-      return res.status(404).json({
-        success: false,
-        message: "Complaint not found",
-      });
-    }
-
-    // Authorization: Users can only view their own complaints
-    if (
-      req.user.role === "user" &&
-      complaint.createdBy?._id.toString() !== req.user._id.toString()
-    ) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to view this complaint",
-      });
-    }
-
-    // Get status history
-    const history = await StatusHistory.getComplaintHistory(complaint._id);
-
-    res.status(200).json({
-      success: true,
-      data: {
-        complaint,
-        history,
-      },
-    });
-  } catch (error) {
-    console.error("Get Complaint By ID Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error fetching complaint details",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Get complaints by user
- * @route   GET /api/complaints/user/:userId
- * @access  Private
- */
-exports.getComplaintsByUser = async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    // Authorization check
-    if (req.user.role === "user" && userId !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "You can only view your own complaints",
-      });
-    }
-
-    const complaints = await Complaint.find({ createdBy: userId })
-      .populate("assignedTo", "name email department")
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      count: complaints.length,
-      data: complaints,
-    });
-  } catch (error) {
-    console.error("Get Complaints By User Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error fetching user complaints",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Update complaint status
- * @route   PUT /api/complaints/:id/status
- * @access  Private (Staff/Admin)
- */
-exports.updateStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, notes } = req.body;
-
-    // Validate status
-    const validStatuses = [
-      "Pending",
-      "In Progress",
-      "Resolved",
-      "Rejected",
-      "Closed",
-    ];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
-      });
-    }
-
-    const complaint = await Complaint.findById(id);
-
-    if (!complaint) {
-      return res.status(404).json({
-        success: false,
-        message: "Complaint not found",
-      });
-    }
-
-    const previousStatus = complaint.status;
-
-    // Prevent setting same status
-    if (previousStatus === status) {
-      return res.status(400).json({
-        success: false,
-        message: `Complaint is already in ${status} status`,
-      });
-    }
-
-    // Create audit trail in status history
-    await StatusHistory.create({
-      complaintId: complaint._id,
-      previousStatus,
-      newStatus: status,
-      changedBy: req.user._id,
-      notes: notes || `Status changed from ${previousStatus} to ${status}`,
-    });
-
-    // Update complaint status
-    complaint.status = status;
-
-    // Set timestamps based on status
-    if (status === "Resolved" && !complaint.resolvedAt) {
-      complaint.resolvedAt = Date.now();
-    }
-
-    if (status === "Closed" && !complaint.closedAt) {
-      complaint.closedAt = Date.now();
-    }
-
-    await complaint.save();
-
-    // Populate and return updated complaint
-    const updatedComplaint = await Complaint.findById(id)
-      .populate("assignedTo", "name email department")
-      .populate("createdBy", "name email");
-
-    res.status(200).json({
-      success: true,
-      message: `Complaint status updated to ${status}`,
-      data: updatedComplaint,
-    });
-  } catch (error) {
-    console.error("Update Status Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error updating complaint status",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Assign complaint to staff member
- * @route   PUT /api/complaints/:id/assign
- * @access  Private (Admin only)
- */
-exports.assignComplaint = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { userId } = req.body;
-
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required for assignment",
-      });
-    }
-
-    const complaint = await Complaint.findById(id);
-
-    if (!complaint) {
-      return res.status(404).json({
-        success: false,
-        message: "Complaint not found",
-      });
-    }
-
-    // Verify the user exists and is staff/admin
-    const User = require("../models/User");
-    const assignee = await User.findById(userId);
-
-    if (!assignee) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    if (!["staff", "admin"].includes(assignee.role)) {
-      return res.status(400).json({
-        success: false,
-        message: "Can only assign to staff or admin users",
-      });
-    }
-
-    // Update assignment
-    const previousAssignee = complaint.assignedTo;
-    complaint.assignedTo = userId;
-
-    // Update status if still pending
-    if (complaint.status === "Pending") {
-      complaint.status = "In Progress";
-    }
-
-    await complaint.save();
-
-    // Create audit trail
-    await StatusHistory.create({
-      complaintId: complaint._id,
-      previousStatus: complaint.status,
-      newStatus: complaint.status,
-      changedBy: req.user._id,
-      notes: previousAssignee
-        ? `Complaint reassigned to ${assignee.name}`
-        : `Complaint assigned to ${assignee.name}`,
-    });
-
-    // Return updated complaint with populated fields
-    const updatedComplaint = await Complaint.findById(id)
-      .populate("assignedTo", "name email department role")
-      .populate("createdBy", "name email");
-
-    res.status(200).json({
-      success: true,
-      message: "Complaint assigned successfully",
-      data: updatedComplaint,
-    });
-  } catch (error) {
-    console.error("Assign Complaint Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error assigning complaint",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Resolve complaint with resolution notes
- * @route   PUT /api/complaints/:id/resolve
- * @access  Private (Staff/Admin)
- */
-exports.resolveComplaint = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { resolutionNotes } = req.body;
-
-    if (!resolutionNotes || resolutionNotes.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Resolution notes are required",
-      });
-    }
-
-    const complaint = await Complaint.findById(id);
-
-    if (!complaint) {
-      return res.status(404).json({
-        success: false,
-        message: "Complaint not found",
-      });
-    }
-
-    if (complaint.status === "Resolved") {
-      return res.status(400).json({
-        success: false,
-        message: "Complaint is already resolved",
-      });
-    }
-
-    const previousStatus = complaint.status;
-
-    // Update complaint
-    complaint.resolutionNotes = resolutionNotes;
-    complaint.status = "Resolved";
-    complaint.resolvedAt = Date.now();
-
-    await complaint.save();
-
-    // Create audit trail
-    await StatusHistory.create({
-      complaintId: complaint._id,
-      previousStatus,
-      newStatus: "Resolved",
-      changedBy: req.user._id,
-      notes: resolutionNotes,
-    });
-
-    // Return updated complaint
-    const resolvedComplaint = await Complaint.findById(id)
-      .populate("assignedTo", "name email department")
-      .populate("createdBy", "name email");
-
-    res.status(200).json({
-      success: true,
-      message: "Complaint resolved successfully",
-      data: resolvedComplaint,
-    });
-  } catch (error) {
-    console.error("Resolve Complaint Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error resolving complaint",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Upload attachments to complaint
- * @route   POST /api/complaints/:id/attachments
- * @access  Private
- */
-exports.uploadAttachments = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const complaint = await Complaint.findById(id);
-
-    if (!complaint) {
-      return res.status(404).json({
-        success: false,
-        message: "Complaint not found",
-      });
-    }
-
-    // Check if files were uploaded
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Please upload at least one file",
-      });
-    }
-
-    // Maximum file limit check
-    if (complaint.attachments.length + req.files.length > 10) {
-      return res.status(400).json({
-        success: false,
-        message: "Maximum 10 attachments allowed per complaint",
-      });
-    }
-
-    // Process uploaded files
-    const attachments = req.files.map((file) => ({
-      filename: file.filename,
-      originalName: file.originalname,
-      path: file.path,
-      mimetype: file.mimetype,
-      size: file.size,
-      uploadedAt: Date.now(),
-    }));
-
-    // Add attachments to complaint
-    complaint.attachments.push(...attachments);
-    await complaint.save();
-
-    res.status(200).json({
-      success: true,
-      message: `${req.files.length} file(s) uploaded successfully`,
-      data: {
-        complaint,
-        uploadedFiles: attachments,
-      },
-    });
-  } catch (error) {
-    console.error("Upload Attachments Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error uploading attachments",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Delete complaint and associated files
- * @route   DELETE /api/complaints/:id
- * @access  Private (Admin only)
- */
-exports.deleteComplaint = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const complaint = await Complaint.findById(id);
-
-    if (!complaint) {
-      return res.status(404).json({
-        success: false,
-        message: "Complaint not found",
-      });
-    }
-
-    // Delete associated files from filesystem
-    if (complaint.attachments && complaint.attachments.length > 0) {
-      for (const file of complaint.attachments) {
-        try {
-          await fs.unlink(file.path);
-          console.log(`✓ Deleted file: ${file.filename}`);
-        } catch (fileError) {
-          console.error(`Failed to delete file: ${file.filename}`, fileError);
-        }
-      }
-    }
-
-    // Delete status history
-    await StatusHistory.deleteMany({ complaintId: complaint._id });
-
-    // Delete complaint
-    await complaint.deleteOne();
-
-    res.status(200).json({
-      success: true,
-      message: "Complaint and associated data deleted successfully",
-    });
-  } catch (error) {
-    console.error("Delete Complaint Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error deleting complaint",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Get comprehensive complaint statistics
- * @route   GET /api/complaints/stats/dashboard
- * @access  Private (Staff/Admin)
- */
-exports.getComplaintStats = async (req, res) => {
-  try {
-    // Use the static method from Complaint model
-    const stats = await Complaint.getStats();
-
-    // Additional real-time stats
-    const overdueCount = await Complaint.countDocuments({
-      status: { $nin: ["Resolved", "Closed"] },
-      dueDate: { $lt: new Date() },
-    });
-
-    const unassignedCount = await Complaint.countDocuments({
-      assignedTo: null,
-      status: "Pending",
-    });
-
-    // Get recent complaints
-    const recentComplaints = await Complaint.find()
-      .populate("createdBy", "name email")
-      .populate("assignedTo", "name email")
-      .sort({ createdAt: -1 })
-      .limit(5)
+    const complaints = await Complaint.find(query)
+      .populate("assignedTo", "name email role")
+      .sort(sortBy)
       .lean();
 
-    res.status(200).json({
+    const stats = {
+      total: complaints.length,
+      pending: complaints.filter((c) => c.status === "pending").length,
+      in_progress: complaints.filter((c) => c.status === "in_progress").length,
+      resolved: complaints.filter((c) => c.status === "resolved").length,
+      rejected: complaints.filter((c) => c.status === "rejected").length,
+      closed: complaints.filter((c) => c.status === "closed").length,
+    };
+
+    res.status(StatusCodes.OK).json({
       success: true,
-      data: {
-        ...stats,
-        overdue: overdueCount,
-        unassigned: unassignedCount,
-        recentComplaints,
-      },
+      count: complaints.length,
+      data: complaints,
+      stats,
     });
   } catch (error) {
-    console.error("Get Complaint Stats Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error fetching complaint statistics",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+    logger.error("Get my complaints error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to fetch your complaints."
+    );
   }
 };
 
-/**
- * @desc    Update complaint details (title, description, etc.)
- * @route   PUT /api/complaints/:id
- * @access  Private
- */
-exports.updateComplaint = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { title, description, category, priority } = req.body;
+/* ========================================================================
+ * 🔍 Get single complaint | GET /api/complaints/:id
+ * ===================================================================== */
 
-    const complaint = await Complaint.findById(id);
+const getComplaint = async (req, res) => {
+  try {
+    const complaint = await Complaint.findById(req.params.id)
+      .populate("user", "name email role avatar phone")
+      .populate("assignedTo", "name email role avatar")
+      .populate("comments.user", "name email role avatar")
+      .populate("statusHistory.changedBy", "name email role")
+      .populate("resolvedBy", "name email role");
 
     if (!complaint) {
-      return res.status(404).json({
-        success: false,
-        message: "Complaint not found",
-      });
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Complaint not found."
+      );
     }
 
-    // Authorization: Only creator or staff/admin can update
-    if (
-      req.user.role === "user" &&
-      complaint.createdBy?.toString() !== req.user._id.toString()
-    ) {
-      return res.status(403).json({
-        success: false,
-        message: "You can only update your own complaints",
-      });
+    const isOwner = complaint.user._id.toString() === req.user._id.toString();
+    const isStaff = ["admin", "staff"].includes(req.user.role);
+
+    if (!isOwner && !isStaff) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.FORBIDDEN,
+        "Not authorized to view this complaint."
+      );
     }
 
-    // Users can't update resolved/closed complaints
-    if (
-      req.user.role === "user" &&
-      ["Resolved", "Closed"].includes(complaint.status)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot update resolved or closed complaints",
-      });
-    }
-
-    // Update fields
-    if (title) complaint.title = title;
-    if (description) complaint.description = description;
-    if (category) complaint.category = category;
-    if (priority && ["staff", "admin"].includes(req.user.role)) {
-      complaint.priority = priority;
-    }
-
-    await complaint.save();
-
-    // Create audit entry
-    await StatusHistory.create({
-      complaintId: complaint._id,
-      previousStatus: complaint.status,
-      newStatus: complaint.status,
-      changedBy: req.user._id,
-      notes: "Complaint details updated",
-    });
-
-    res.status(200).json({
+    res.status(StatusCodes.OK).json({
       success: true,
-      message: "Complaint updated successfully",
       data: complaint,
     });
   } catch (error) {
-    console.error("Update Complaint Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error updating complaint",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+    logger.error("Get complaint error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to fetch complaint."
+    );
   }
+};
+
+/* ========================================================================
+ * ✏️ Update complaint | PUT /api/complaints/:id
+ * ===================================================================== */
+
+const updateComplaint = async (req, res) => {
+  try {
+    const complaint = await Complaint.findById(req.params.id);
+
+    if (!complaint) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Complaint not found."
+      );
+    }
+
+    const isOwner = complaint.user.toString() === req.user._id.toString();
+    const isStaff = ["admin", "staff"].includes(req.user.role);
+
+    if (isOwner && complaint.status === "pending") {
+      const allowedUpdates = ["title", "description", "category", "priority"];
+      allowedUpdates.forEach((field) => {
+        if (req.body[field] !== undefined) {
+          complaint[field] = req.body[field];
+        }
+      });
+    } else if (isStaff) {
+      if (req.body.status) {
+        await complaint.updateStatus(
+          req.body.status,
+          req.user._id,
+          req.body.statusNote
+        );
+      }
+      if (req.body.notes !== undefined) {
+        complaint.notes = req.body.notes.trim();
+      }
+      if (req.body.assignedTo) {
+        complaint.assignedTo = req.body.assignedTo;
+      }
+    } else {
+      return sendErrorResponse(
+        res,
+        StatusCodes.FORBIDDEN,
+        "Not authorized to update this complaint."
+      );
+    }
+
+    await complaint.save();
+
+    logger.info(`Complaint ${complaint._id} updated by ${req.user.email}`);
+
+    // Broadcast updated complaint for dashboards
+    broadcastComplaintEvent("UPDATED_COMPLAINT", complaint);
+
+    res.status(StatusCodes.OK).json({
+      success: true,
+      message: "Complaint updated successfully.",
+      data: complaint,
+    });
+  } catch (error) {
+    logger.error("Update complaint error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to update complaint."
+    );
+  }
+};
+
+/* ========================================================================
+ * ✅ Update status | PATCH /api/complaints/:id/status
+ * ===================================================================== */
+
+const updateComplaintStatus = async (req, res) => {
+  try {
+    const { status, note } = req.body;
+
+    if (!status) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Status is required."
+      );
+    }
+
+    const complaint = await Complaint.findById(req.params.id);
+
+    if (!complaint) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Complaint not found."
+      );
+    }
+
+    await complaint.updateStatus(status, req.user._id, note);
+
+    logger.info(
+      `Complaint ${complaint._id} status updated to ${status} by ${req.user.email}`
+    );
+
+    // Broadcast status change
+    broadcastComplaintEvent("UPDATED_COMPLAINT", complaint, {
+      statusChanged: true,
+    });
+
+    res.status(StatusCodes.OK).json({
+      success: true,
+      message: "Complaint status updated successfully.",
+      data: complaint,
+    });
+  } catch (error) {
+    logger.error("Update complaint status error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to update complaint status."
+    );
+  }
+};
+
+/* ========================================================================
+ * 🗑️ Delete complaint | DELETE /api/complaints/:id
+ * ===================================================================== */
+
+const deleteComplaint = async (req, res) => {
+  try {
+    const complaint = await Complaint.findById(req.params.id);
+
+    if (!complaint) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Complaint not found."
+      );
+    }
+
+    const isOwner = complaint.user.toString() === req.user._id.toString();
+    const isStaff = ["admin", "staff"].includes(req.user.role);
+
+    if (!isOwner && !isStaff) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.FORBIDDEN,
+        "Not authorized to delete this complaint."
+      );
+    }
+
+    if (isOwner && complaint.status !== "pending") {
+      return sendErrorResponse(
+        res,
+        StatusCodes.FORBIDDEN,
+        "Can only delete pending complaints."
+      );
+    }
+
+    const deletedId = complaint._id;
+    await complaint.deleteOne();
+
+    logger.info(`Complaint ${deletedId} deleted by ${req.user.email}`);
+
+    // Broadcast deletion
+    broadcastComplaintEvent("DELETED_COMPLAINT", { _id: deletedId });
+
+    res.status(StatusCodes.OK).json({
+      success: true,
+      message: "Complaint deleted successfully.",
+    });
+  } catch (error) {
+    logger.error("Delete complaint error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to delete complaint."
+    );
+  }
+};
+
+/* ========================================================================
+ * 📊 Global stats | GET /api/complaints/stats
+ * ===================================================================== */
+
+const getComplaintStats = async (req, res) => {
+  try {
+    const [statusStats, categoryStats, priorityStats, recentComplaints] =
+      await Promise.all([
+        Complaint.aggregate([
+          { $group: { _id: "$status", count: { $sum: 1 } } },
+        ]),
+        Complaint.aggregate([
+          { $group: { _id: "$category", count: { $sum: 1 } } },
+        ]),
+        Complaint.aggregate([
+          { $group: { _id: "$priority", count: { $sum: 1 } } },
+        ]),
+        Complaint.countDocuments({
+          createdAt: {
+            $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+          },
+        }),
+      ]);
+
+    const total = await Complaint.countDocuments();
+
+    const result = {
+      total,
+      recent: recentComplaints,
+      byStatus: {
+        pending: 0,
+        in_progress: 0,
+        resolved: 0,
+        rejected: 0,
+        closed: 0,
+      },
+      byCategory: {},
+      byPriority: {
+        low: 0,
+        medium: 0,
+        high: 0,
+        urgent: 0,
+      },
+    };
+
+    statusStats.forEach(({ _id, count }) => {
+      result.byStatus[_id] = count;
+    });
+
+    categoryStats.forEach(({ _id, count }) => {
+      result.byCategory[_id] = count;
+    });
+
+    priorityStats.forEach(({ _id, count }) => {
+      result.byPriority[_id] = count;
+    });
+
+    res.status(StatusCodes.OK).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    logger.error("Get complaint stats error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to fetch complaint statistics."
+    );
+  }
+};
+
+/* ========================================================================
+ * 💬 Comments
+ * ===================================================================== */
+
+const addComplaintComment = async (req, res) => {
+  try {
+    const { comment } = req.body;
+
+    if (!comment || comment.trim().length === 0) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Comment text is required."
+      );
+    }
+
+    const complaint = await Complaint.findById(req.params.id);
+
+    if (!complaint) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Complaint not found."
+      );
+    }
+
+    const isOwner = complaint.user.toString() === req.user._id.toString();
+    const isStaff = ["admin", "staff"].includes(req.user.role);
+
+    if (!isOwner && !isStaff) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.FORBIDDEN,
+        "Not authorized to comment on this complaint."
+      );
+    }
+
+    const newComment = await complaint.addComment(
+      req.user._id,
+      comment,
+      isStaff
+    );
+
+    await complaint.populate("comments.user", "name email role avatar");
+
+    logger.info(
+      `Comment added to complaint ${complaint._id} by ${req.user.email}`
+    );
+
+    // Broadcast comment added event
+    broadcastComplaintEvent("NEW_COMMENT", {
+      complaintId: complaint._id,
+      comment: newComment,
+    });
+
+    res.status(StatusCodes.CREATED).json({
+      success: true,
+      message: "Comment added successfully.",
+      data: newComment,
+    });
+  } catch (error) {
+    logger.error("Add comment error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to add comment."
+    );
+  }
+};
+
+const getComplaintComments = async (req, res) => {
+  try {
+    const complaint = await Complaint.findById(req.params.id)
+      .select("comments")
+      .populate("comments.user", "name email role avatar");
+
+    if (!complaint) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Complaint not found."
+      );
+    }
+
+    res.status(StatusCodes.OK).json({
+      success: true,
+      count: complaint.comments.length,
+      data: complaint.comments,
+    });
+  } catch (error) {
+    logger.error("Get comments error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to fetch comments."
+    );
+  }
+};
+
+/* ========================================================================
+ * 📎 Attachments
+ * ===================================================================== */
+
+const downloadComplaintAttachment = async (req, res) => {
+  try {
+    const { id, attachmentId } = req.params;
+
+    const complaint = await Complaint.findById(id);
+
+    if (!complaint) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Complaint not found."
+      );
+    }
+
+    const attachment = complaint.attachments.id(attachmentId);
+
+    if (!attachment) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Attachment not found."
+      );
+    }
+
+    const filePath = attachment.path
+      ? attachment.path
+      : path.join(process.cwd(), "uploads", "complaints", attachment.filename);
+
+    if (!fs.existsSync(filePath)) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "File not found on server."
+      );
+    }
+
+    res.download(filePath, attachment.originalName);
+  } catch (error) {
+    logger.error("Download attachment error:", error);
+    sendErrorResponse(
+      res,
+      StatusCodes.INTERNAL_SERVER_ERROR,
+      "Failed to download attachment."
+    );
+  }
+};
+
+module.exports = {
+  createComplaint,
+  getComplaints,
+  getMyComplaints,
+  getComplaint,
+  updateComplaint,
+  updateComplaintStatus,
+  deleteComplaint,
+  getComplaintStats,
+  addComplaintComment,
+  getComplaintComments,
+  downloadComplaintAttachment,
 };

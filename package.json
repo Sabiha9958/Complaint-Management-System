@@ -1,0 +1,13 @@
+{
+  "name": "complaint-management-system",
+  "version": "1.0.0",
+  "scripts": {
+    "frontend": "npm run dev --prefix frontend",
+    "backend": "npm run dev --prefix backend",
+    "dev": "concurrently -n FRONTEND,BACKEND -c cyan,green \"npm run frontend\" \"npm run backend\"",
+    "start": "npm run backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

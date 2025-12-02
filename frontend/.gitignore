@@ -1,23 +1,31 @@
-# dependencies
-/node_modules
-/.pnp
+# Node modules and package manager files
+/node_modules/
+.pnp/
 .pnp.js
 
-# testing
-/coverage
+# Testing coverage results
+/coverage/
 
-# production
-/build
+# Production build output
+/dist/
+/build/
 
-# misc
+# System & IDE files
 .DS_Store
+.vscode/
+.idea/
+
+# Environment files (ignore local secrets and overrides)
+/.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 
+# Log files for npm/yarn
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-.env
+# Optional: Cache directories (adjust as needed)
+.cache/

@@ -1,25 +1,21 @@
-/**
- * Database Configuration
- * Handles MongoDB connection with enhanced error handling and connection events
- */
-
 const mongoose = require("mongoose");
 
 const connectDB = async () => {
   try {
-    // MongoDB connection options for better performance and reliability
     const options = {
-      maxPoolSize: 10, // Maximum number of connections in the pool
-      serverSelectionTimeoutMS: 5000, // Timeout for server selection
-      socketTimeoutMS: 45000, // Timeout for socket operations
+      maxPoolSize: process.env.NODE_ENV === "production" ? 50 : 10,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+      autoIndex: process.env.NODE_ENV !== "production", // auto-disable in prod
     };
 
     const conn = await mongoose.connect(process.env.MONGO_URI, options);
 
+    console.log("===============================================");
     console.log(`✓ MongoDB Connected: ${conn.connection.host}`);
-    console.log(`✓ Database Name: ${conn.connection.name}`);
+    console.log(`✓ Database Name:    ${conn.connection.name}`);
+    console.log("===============================================");
 
-    // Connection event listeners for monitoring
     mongoose.connection.on("error", (err) => {
       console.error(`❌ MongoDB Error: ${err.message}`);
     });
@@ -32,9 +28,15 @@ const connectDB = async () => {
       console.log("✓ MongoDB Reconnected");
     });
 
+    mongoose.connection.on("connected", () => {
+      console.log("✓ MongoDB Connection Established");
+    });
+
     return conn;
   } catch (error) {
+    console.error("===============================================");
     console.error(`❌ Database Connection Error: ${error.message}`);
+    console.error("===============================================");
     process.exit(1);
   }
 };

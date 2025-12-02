@@ -1,58 +1,87 @@
 /**
- * Status History Model
- * Tracks all status changes for audit trail
+ * StatusHistory Model
+ * Tracks complaint status changes with metadata (who changed, when, notes).
  */
 
 const mongoose = require("mongoose");
 
 const statusHistorySchema = new mongoose.Schema(
   {
-    complaintId: {
+    complaint: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Complaint",
-      required: [true, "Complaint ID is required"],
+      required: true,
       index: true,
     },
     previousStatus: {
       type: String,
-      required: [true, "Previous status is required"],
+      enum: ["pending", "in_progress", "resolved", "rejected", "closed"],
+      required: true,
     },
     newStatus: {
       type: String,
-      required: [true, "New status is required"],
+      enum: ["pending", "in_progress", "resolved", "rejected", "closed"],
+      required: true,
     },
     changedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: [true, "Changed by user ID is required"],
+      required: true,
+      index: true,
     },
     notes: {
       type: String,
       trim: true,
-      maxlength: [500, "Notes cannot exceed 500 characters"],
-      default: null,
+      maxlength: [1000, "Notes cannot exceed 1000 characters"],
     },
-    timestamp: {
-      type: Date,
-      default: Date.now,
-      index: true,
+    priorityChange: {
+      type: String,
+      enum: ["low", "medium", "high"],
+      default: null,
     },
   },
   {
-    timestamps: false, // We're using custom timestamp field
+    timestamps: true, // adds createdAt & updatedAt
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
 
-// Compound index for efficient queries
-statusHistorySchema.index({ complaintId: 1, timestamp: -1 });
+/**
+ * Indexes for faster queries
+ */
+statusHistorySchema.index({ complaint: 1, createdAt: -1 });
+statusHistorySchema.index({ changedBy: 1, createdAt: -1 });
 
 /**
- * Static method to get status history for a complaint
+ * Virtual: formatted history entry
  */
-statusHistorySchema.statics.getComplaintHistory = async function (complaintId) {
-  return await this.find({ complaintId })
-    .populate("changedBy", "name email role")
-    .sort({ timestamp: -1 });
+statusHistorySchema.virtual("summary").get(function () {
+  return `Complaint moved from ${this.previousStatus} → ${this.newStatus} by ${this.changedBy}`;
+});
+
+/**
+ * Method: Check if transition is valid
+ */
+statusHistorySchema.methods.isValidTransition = function () {
+  const validTransitions = {
+    pending: ["in_progress", "rejected"],
+    in_progress: ["resolved", "rejected", "closed"],
+    resolved: ["closed"],
+    rejected: ["closed"],
+    closed: [],
+  };
+  return validTransitions[this.previousStatus]?.includes(this.newStatus);
 };
 
-module.exports = mongoose.model("StatusHistory", statusHistorySchema);
+/**
+ * Pre-save hook: normalize notes
+ */
+statusHistorySchema.pre("save", function (next) {
+  if (this.notes) this.notes = this.notes.trim();
+  next();
+});
+
+const StatusHistory = mongoose.model("StatusHistory", statusHistorySchema);
+
+module.exports = StatusHistory;

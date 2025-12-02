@@ -1,118 +1,81 @@
 /**
- * Reports Routes
- * Handles report generation and analytics
+ * Report Routes
+ * Handles complaint and user reporting/statistics for dashboards and exports.
  */
 
 const express = require("express");
 const router = express.Router();
-const Complaint = require("../models/Complaint");
-const User = require("../models/User");
+
+const {
+  getComplaintStats,
+  getUserStats,
+  exportComplaintStatsCSV,
+  exportComplaintStatsExcel,
+  exportUserStatsCSV,
+  exportUserStatsExcel,
+} = require("../controllers/reportController");
+
 const { protect, authorize } = require("../middleware/auth");
+const { paginationValidator } = require("../middleware/validator");
+const { sensitiveLimiter } = require("../middleware/rateLimiter");
 
-/**
- * @desc    Get comprehensive reports data
- * @route   GET /api/reports
- * @access  Private (Admin/Staff)
- */
-router.get("/", protect, authorize("admin", "staff"), async (req, res) => {
-  try {
-    const { startDate, endDate, type = "all" } = req.query;
+// =======================
+// Admin/Staff Routes
+// =======================
 
-    // Date range filter
-    const dateFilter = {};
-    if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
+// Complaint statistics (admin/staff only)
+router.get(
+  "/complaints",
+  protect,
+  authorize("admin", "staff"),
+  sensitiveLimiter,
+  getComplaintStats
+);
 
-    const hasDateFilter = startDate || endDate;
+// Export complaint statistics (CSV)
+router.get(
+  "/complaints/export/csv",
+  protect,
+  authorize("admin", "staff"),
+  sensitiveLimiter,
+  exportComplaintStatsCSV
+);
 
-    // Complaints statistics
-    const complaintStats = await Complaint.aggregate([
-      ...(hasDateFilter ? [{ $match: { createdAt: dateFilter } }] : []),
-      {
-        $facet: {
-          statusBreakdown: [
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-            { $sort: { _id: 1 } },
-          ],
-          categoryBreakdown: [
-            { $group: { _id: "$category", count: { $sum: 1 } } },
-            { $sort: { count: -1 } },
-          ],
-          priorityBreakdown: [
-            { $group: { _id: "$priority", count: { $sum: 1 } } },
-            { $sort: { _id: 1 } },
-          ],
-          monthlyTrend: [
-            {
-              $group: {
-                _id: {
-                  year: { $year: "$createdAt" },
-                  month: { $month: "$createdAt" },
-                },
-                count: { $sum: 1 },
-              },
-            },
-            { $sort: { "_id.year": 1, "_id.month": 1 } },
-            { $limit: 12 },
-          ],
-          averageResolutionTime: [
-            {
-              $match: { resolvedAt: { $ne: null } },
-            },
-            {
-              $project: {
-                resolutionTime: {
-                  $divide: [
-                    { $subtract: ["$resolvedAt", "$createdAt"] },
-                    3600000, // Convert to hours
-                  ],
-                },
-              },
-            },
-            {
-              $group: {
-                _id: null,
-                avgTime: { $avg: "$resolutionTime" },
-              },
-            },
-          ],
-        },
-      },
-    ]);
+// Export complaint statistics (Excel)
+router.get(
+  "/complaints/export/excel",
+  protect,
+  authorize("admin", "staff"),
+  sensitiveLimiter,
+  exportComplaintStatsExcel
+);
 
-    // User statistics
-    const userStats = {
-      total: await User.countDocuments(),
-      active: await User.countDocuments({ isActive: true }),
-      byRole: await User.aggregate([
-        { $group: { _id: "$role", count: { $sum: 1 } } },
-      ]),
-    };
+// User statistics (admin only)
+router.get(
+  "/users",
+  protect,
+  authorize("admin"),
+  sensitiveLimiter,
+  paginationValidator,
+  getUserStats
+);
 
-    // Recent activity
-    const recentComplaints = await Complaint.find()
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .populate("createdBy", "name email")
-      .populate("assignedTo", "name email");
+// Export user statistics (CSV)
+router.get(
+  "/users/export/csv",
+  protect,
+  authorize("admin"),
+  sensitiveLimiter,
+  exportUserStatsCSV
+);
 
-    res.status(200).json({
-      success: true,
-      data: {
-        complaints: complaintStats[0],
-        users: userStats,
-        recentActivity: recentComplaints,
-        generatedAt: new Date(),
-        dateRange: hasDateFilter ? { startDate, endDate } : "all-time",
-      },
-    });
-  } catch (error) {
-    console.error("Get Reports Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error generating reports",
-    });
-  }
-});
+// Export user statistics (Excel)
+router.get(
+  "/users/export/excel",
+  protect,
+  authorize("admin"),
+  sensitiveLimiter,
+  exportUserStatsExcel
+);
 
 module.exports = router;

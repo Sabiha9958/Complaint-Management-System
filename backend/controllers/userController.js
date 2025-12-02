@@ -1,502 +1,1031 @@
 /**
- * User Controller - Complete Implementation
- * Handles all user management operations
+ * ════════════════════════════════════════════════════════════════
+ * 👤 USER CONTROLLER
+ * ════════════════════════════════════════════════════════════════
+ * Handles user profile management, avatar uploads, updates,
+ * statistics, and password reset (forgot/reset).
+ * ════════════════════════════════════════════════════════════════
  */
 
-const User = require("../models/User");
+const fs = require("fs");
+const crypto = require("crypto");
+const { StatusCodes } = require("http-status-codes");
+
+const User = require("../models/UserModel");
+const logger = require("../utils/logger");
+const {
+  sendPasswordResetEmail,
+  sendPasswordResetConfirmation,
+} = require("../utils/emailService");
+
+// ════════════════════════════════════════════════════════════════
+// 🛠️ HELPER FUNCTIONS
+// ════════════════════════════════════════════════════════════════
 
 /**
- * @desc    Get all users with filters, pagination, and statistics
- * @route   GET /api/users
- * @access  Private (Admin)
+ * Async error wrapper (like in authController)
  */
-exports.getAllUsers = async (req, res) => {
+const asyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
+/**
+ * Standardized server error response + logging
+ */
+const sendServerError = (res, message, error) => {
+  if (error) {
+    logger.error(message, { error });
+  } else {
+    logger.error(message);
+  }
+
+  return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+    success: false,
+    message,
+  });
+};
+
+/**
+ * Standard error response
+ */
+const sendErrorResponse = (res, statusCode, message, extra = {}) => {
+  return res.status(statusCode).json({
+    success: false,
+    message,
+    ...extra,
+  });
+};
+
+/**
+ * Clean up uploaded file on error
+ */
+const cleanupFile = (filePath) => {
+  if (!filePath) return;
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      logger.info(`Cleaned up file: ${filePath}`);
+    }
+  } catch (error) {
+    logger.error(`Failed to cleanup file: ${filePath}`, { error });
+  }
+};
+
+/**
+ * Simple MongoDB ObjectId validator (24 hex chars)
+ */
+const isValidObjectId = (id) => /^[0-9a-fA-F]{24}$/.test(id);
+
+/**
+ * Lightweight audit logger (similar to authController)
+ */
+const logAuditEvent = async (eventData) => {
+  try {
+    logger.info(`AUDIT: ${JSON.stringify(eventData)}`);
+    // Optionally persist audit events to DB
+  } catch (error) {
+    logger.error(`Audit log error: ${error.message}`, { error });
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// 📋 USER MANAGEMENT (ADMIN/STAFF)
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Get all users with pagination and filtering
+ * @route   GET /api/users
+ * @access  Private (Admin/Staff)
+ */
+const getUsers = async (req, res) => {
   try {
     const {
-      role,
-      isActive,
-      search,
       page = 1,
       limit = 20,
-      sortBy = "createdAt",
-      sortOrder = "desc",
+      role,
+      search,
+      sortBy = "-createdAt",
+      isActive,
     } = req.query;
 
-    // Build query
-    const query = {};
-    if (role) query.role = role;
-    if (isActive !== undefined) query.isActive = isActive === "true";
+    const numericPage = Math.max(1, parseInt(page, 10) || 1);
+    const numericLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const skip = (numericPage - 1) * numericLimit;
 
-    // Search functionality
-    if (search) {
+    const query = {};
+
+    if (role && ["user", "staff", "admin"].includes(role)) {
+      query.role = role;
+    }
+
+    if (typeof isActive === "string") {
+      query.isActive = isActive === "true";
+    }
+
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim(), "i");
       query.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-        { department: { $regex: search, $options: "i" } },
+        { name: regex },
+        { email: regex },
+        { department: regex },
+        { title: regex },
       ];
     }
 
-    // Pagination
-    const pageNum = parseInt(page, 10);
-    const limitNum = parseInt(limit, 10);
-    const skip = (pageNum - 1) * limitNum;
+    const [users, total] = await Promise.all([
+      User.find(query)
+        .select(
+          "-password -resetPasswordToken -resetPasswordExpire -loginAttempts -lockUntil"
+        )
+        .sort(sortBy)
+        .skip(skip)
+        .limit(numericLimit)
+        .lean(),
+      User.countDocuments(query),
+    ]);
 
-    // Sort
-    const sort = {};
-    sort[sortBy] = sortOrder === "asc" ? 1 : -1;
-
-    // Execute query
-    const users = await User.find(query)
-      .select("-password")
-      .sort(sort)
-      .limit(limitNum)
-      .skip(skip)
-      .lean();
-
-    const total = await User.countDocuments(query);
-
-    // Get statistics
-    const stats = {
-      total: await User.countDocuments(),
-      active: await User.countDocuments({ isActive: true }),
-      inactive: await User.countDocuments({ isActive: false }),
-      admins: await User.countDocuments({ role: "admin" }),
-      staff: await User.countDocuments({ role: "staff" }),
-      users: await User.countDocuments({ role: "user" }),
-    };
-
-    res.status(200).json({
+    return res.status(StatusCodes.OK).json({
       success: true,
       count: users.length,
-      pagination: {
-        total,
-        totalPages: Math.ceil(total / limitNum),
-        currentPage: pageNum,
-        limit: limitNum,
-        hasNextPage: pageNum * limitNum < total,
-        hasPrevPage: pageNum > 1,
-      },
-      stats,
+      total,
+      page: numericPage,
+      pages: Math.ceil(total / numericLimit),
       data: users,
     });
   } catch (error) {
-    console.error("Get All Users Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error fetching users",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+    return sendServerError(res, "Failed to fetch users.", error);
   }
 };
 
 /**
- * @desc    Get user statistics for reports
- * @route   GET /api/users/stats
- * @access  Private (Admin)
- */
-exports.getUserStats = async (req, res) => {
-  try {
-    // Role distribution
-    const roleStats = await User.aggregate([
-      {
-        $group: {
-          _id: "$role",
-          count: { $sum: 1 },
-        },
-      },
-    ]);
-
-    // Department distribution
-    const departmentStats = await User.aggregate([
-      {
-        $match: { department: { $ne: null } },
-      },
-      {
-        $group: {
-          _id: "$department",
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $sort: { count: -1 },
-      },
-    ]);
-
-    // Active vs Inactive
-    const activityStats = await User.aggregate([
-      {
-        $group: {
-          _id: "$isActive",
-          count: { $sum: 1 },
-        },
-      },
-    ]);
-
-    // Recent registrations (last 30 days)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    const recentUsers = await User.find({
-      createdAt: { $gte: thirtyDaysAgo },
-    })
-      .select("name email role createdAt")
-      .sort({ createdAt: -1 })
-      .limit(10);
-
-    // Total counts
-    const totalUsers = await User.countDocuments();
-    const activeUsers = await User.countDocuments({ isActive: true });
-    const inactiveUsers = await User.countDocuments({ isActive: false });
-
-    res.status(200).json({
-      success: true,
-      data: {
-        total: totalUsers,
-        active: activeUsers,
-        inactive: inactiveUsers,
-        roleDistribution: roleStats,
-        departmentDistribution: departmentStats,
-        activityDistribution: activityStats,
-        recentRegistrations: recentUsers,
-      },
-    });
-  } catch (error) {
-    console.error("Get User Stats Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error fetching user statistics",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Get staff users (for assignment dropdown)
- * @route   GET /api/users/staff
- * @access  Private (Admin)
- */
-exports.getStaffUsers = async (req, res) => {
-  try {
-    const staff = await User.find({
-      role: { $in: ["staff", "admin"] },
-      isActive: true,
-    }).select("name email department role");
-
-    res.status(200).json({
-      success: true,
-      count: staff.length,
-      data: staff,
-    });
-  } catch (error) {
-    console.error("Get Staff Users Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error fetching staff users",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Get single user by ID
+ * Get single user by ID
  * @route   GET /api/users/:id
- * @access  Private (Admin)
+ * @access  Private (Admin/Staff)
  */
-exports.getUserById = async (req, res) => {
+const getUser = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select("-password");
+    const { id } = req.params;
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+    if (!isValidObjectId(id)) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Invalid user ID format."
+      );
     }
 
-    res.status(200).json({
+    const user = await User.findById(id).select(
+      "-password -resetPasswordToken -resetPasswordExpire -loginAttempts -lockUntil"
+    );
+
+    if (!user) {
+      return sendErrorResponse(res, StatusCodes.NOT_FOUND, "User not found.");
+    }
+
+    return res.status(StatusCodes.OK).json({
       success: true,
       data: user,
     });
   } catch (error) {
-    console.error("Get User By ID Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error fetching user",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+    return sendServerError(res, "Failed to fetch user.", error);
   }
 };
 
 /**
- * @desc    Update user profile (own profile)
- * @route   PUT /api/users/profile
- * @access  Private
+ * Update user by ID (Admin/Staff)
+ * @route   PUT /api/users/:id
+ * @access  Private (Admin/Staff)
  */
-exports.updateProfile = async (req, res) => {
+const updateUser = async (req, res) => {
   try {
-    const { name, email, department, phone } = req.body;
+    const { id } = req.params;
 
-    // Prevent email duplication
-    if (email) {
-      const existingUser = await User.findOne({
-        email,
-        _id: { $ne: req.user._id },
-      });
-
-      if (existingUser) {
-        return res.status(400).json({
-          success: false,
-          message: "Email already in use by another account",
-        });
-      }
+    if (!isValidObjectId(id)) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Invalid user ID format."
+      );
     }
 
-    // Build update object
-    const fieldsToUpdate = {};
-    if (name) fieldsToUpdate.name = name;
-    if (email) fieldsToUpdate.email = email;
-    if (department) fieldsToUpdate.department = department;
-    if (phone) fieldsToUpdate.phone = phone;
+    const updates = { ...req.body };
+    delete updates.password;
+    delete updates.role;
+    delete updates.email;
+    delete updates._id;
+    delete updates.createdAt;
+    delete updates.updatedAt;
 
-    const user = await User.findByIdAndUpdate(req.user._id, fieldsToUpdate, {
+    const user = await User.findByIdAndUpdate(id, updates, {
       new: true,
       runValidators: true,
-    });
-
-    res.status(200).json({
-      success: true,
-      message: "Profile updated successfully",
-      data: user,
-    });
-  } catch (error) {
-    console.error("Update Profile Error:", error);
-
-    if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map((err) => err.message);
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: messages,
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: "Error updating profile",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Update user (Admin)
- * @route   PUT /api/users/:id
- * @access  Private (Admin)
- */
-exports.updateUser = async (req, res) => {
-  try {
-    const { name, email, role, department, phone, isActive } = req.body;
-
-    const user = await User.findById(req.params.id);
+    }).select("-password");
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+      return sendErrorResponse(res, StatusCodes.NOT_FOUND, "User not found.");
     }
 
-    // Check if email is being changed and if it's already in use
-    if (email && email !== user.email) {
-      const emailExists = await User.findOne({ email, _id: { $ne: user._id } });
-      if (emailExists) {
-        return res.status(400).json({
-          success: false,
-          message: "Email already in use",
-        });
-      }
-    }
+    logger.info(`User ${user._id} updated by ${req.user.email}`);
 
-    // Update fields
-    if (name) user.name = name;
-    if (email) user.email = email;
-    if (role) user.role = role;
-    if (department !== undefined) user.department = department;
-    if (phone) user.phone = phone;
-    if (isActive !== undefined) user.isActive = isActive;
-
-    await user.save();
-
-    res.status(200).json({
+    return res.status(StatusCodes.OK).json({
       success: true,
-      message: "User updated successfully",
+      message: "User updated successfully.",
       data: user,
     });
   } catch (error) {
-    console.error("Update User Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error updating user",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+    return sendServerError(res, "Failed to update user.", error);
   }
 };
 
 /**
- * @desc    Update user role
- * @route   PUT /api/users/:id/role
- * @access  Private (Admin)
- */
-exports.updateUserRole = async (req, res) => {
-  try {
-    const { role } = req.body;
-
-    if (!role) {
-      return res.status(400).json({
-        success: false,
-        message: "Role is required",
-      });
-    }
-
-    const validRoles = ["user", "staff", "admin"];
-    if (!validRoles.includes(role)) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid role. Must be one of: ${validRoles.join(", ")}`,
-      });
-    }
-
-    // Prevent self-demotion
-    if (req.params.id === req.user._id.toString() && role !== "admin") {
-      return res.status(400).json({
-        success: false,
-        message: "You cannot change your own admin role",
-      });
-    }
-
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      { role },
-      { new: true, runValidators: true }
-    ).select("-password");
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: `User role updated to ${role}`,
-      data: user,
-    });
-  } catch (error) {
-    console.error("Update User Role Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error updating user role",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Activate/Deactivate user
- * @route   PUT /api/users/:id/status
- * @access  Private (Admin)
- */
-exports.toggleUserStatus = async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id).select("-password");
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    // Prevent self-deactivation
-    if (req.params.id === req.user._id.toString()) {
-      return res.status(400).json({
-        success: false,
-        message: "You cannot deactivate your own account",
-      });
-    }
-
-    // Toggle active status
-    user.isActive = !user.isActive;
-    await user.save();
-
-    res.status(200).json({
-      success: true,
-      message: `User ${
-        user.isActive ? "activated" : "deactivated"
-      } successfully`,
-      data: user,
-    });
-  } catch (error) {
-    console.error("Toggle User Status Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error updating user status",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * @desc    Delete user
+ * Delete user by ID
  * @route   DELETE /api/users/:id
- * @access  Private (Admin)
+ * @access  Private (Admin only)
  */
-exports.deleteUser = async (req, res) => {
+const deleteUser = async (req, res) => {
   try {
-    // Prevent self-deletion
-    if (req.params.id === req.user._id.toString()) {
-      return res.status(400).json({
-        success: false,
-        message: "You cannot delete your own account",
-      });
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Invalid user ID format."
+      );
     }
 
-    const user = await User.findById(req.params.id);
+    const user = await User.findById(id);
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+      return sendErrorResponse(res, StatusCodes.NOT_FOUND, "User not found.");
     }
 
-    // Check if user has assigned complaints
-    const Complaint = require("../models/Complaint");
-    const assignedComplaints = await Complaint.countDocuments({
-      assignedTo: user._id,
-      status: { $in: ["Pending", "In Progress"] },
-    });
+    if (user._id.toString() === req.user._id.toString()) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "You cannot delete your own account."
+      );
+    }
 
-    if (assignedComplaints > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot delete user with ${assignedComplaints} active assigned complaint(s). Please reassign first.`,
-      });
+    if (user.role === "admin" && req.user.role !== "super_admin") {
+      return sendErrorResponse(
+        res,
+        StatusCodes.FORBIDDEN,
+        "You cannot delete admin accounts."
+      );
     }
 
     await user.deleteOne();
 
-    res.status(200).json({
+    logger.info(
+      `User ${user._id} (${user.email}) deleted by ${req.user.email}`
+    );
+
+    return res.status(StatusCodes.OK).json({
       success: true,
-      message: "User deleted successfully",
+      message: "User deleted successfully.",
     });
   } catch (error) {
-    console.error("Delete User Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error deleting user",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    return sendServerError(res, "Failed to delete user.", error);
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// 👤 PROFILE MANAGEMENT (CURRENT USER)
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Get own profile
+ * @route   GET /api/users/me
+ * @access  Private (User)
+ */
+const getProfile = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select(
+      "-password -resetPasswordToken -resetPasswordExpire -loginAttempts -lockUntil"
+    );
+
+    if (!user) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Profile not found."
+      );
+    }
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      data: user,
+    });
+  } catch (error) {
+    return sendServerError(res, "Failed to fetch profile.", error);
+  }
+};
+
+/**
+ * Update own profile (text fields only)
+ * @route   PUT /api/users/me
+ * @access  Private (User)
+ */
+const updateProfile = async (req, res) => {
+  try {
+    const allowedUpdates = [
+      "name",
+      "phone",
+      "title",
+      "department",
+      "location",
+      "bio",
+    ];
+    const updates = {};
+
+    allowedUpdates.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    });
+
+    delete updates.role;
+    delete updates.email;
+    delete updates.password;
+    delete updates.isActive;
+    delete updates.isEmailVerified;
+
+    if (Object.keys(updates).length === 0) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "No valid fields to update."
+      );
+    }
+
+    const user = await User.findByIdAndUpdate(req.user._id, updates, {
+      new: true,
+      runValidators: true,
+    }).select("-password");
+
+    if (!user) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.NOT_FOUND,
+        "Profile not found."
+      );
+    }
+
+    logger.info(`Profile updated by ${req.user.email}`);
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      message: "Profile updated successfully.",
+      data: user,
+    });
+  } catch (error) {
+    return sendServerError(res, "Failed to update profile.", error);
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// 📸 AVATAR MANAGEMENT
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Upload/Update Avatar
+ * @route   POST /api/users/me/avatar
+ * @access  Private (User)
+ */
+const uploadAvatarController = async (req, res) => {
+  try {
+    if (!req.file) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Please upload an image file."
+      );
+    }
+
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      cleanupFile(req.file.path);
+      return sendErrorResponse(res, StatusCodes.NOT_FOUND, "User not found.");
+    }
+
+    const avatar = await user.updateAvatar(req.file, req);
+
+    logger.info(
+      `Avatar updated by ${req.user.email} - File: ${req.file.filename}`
+    );
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      message: "Avatar uploaded successfully.",
+      data: {
+        avatar,
+        user: user.toSafeObject(),
+      },
+    });
+  } catch (error) {
+    cleanupFile(req.file?.path);
+    return sendServerError(res, "Failed to upload avatar.", error);
+  }
+};
+
+/**
+ * Delete Avatar
+ * @route   DELETE /api/users/me/avatar
+ * @access  Private (User)
+ */
+const deleteAvatar = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return sendErrorResponse(res, StatusCodes.NOT_FOUND, "User not found.");
+    }
+
+    if (!user.avatar && !user.image) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "No avatar to delete."
+      );
+    }
+
+    await user.deleteAvatar();
+
+    logger.info(`Avatar deleted by ${req.user.email} (ID: ${req.user._id})`);
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      message: "Avatar deleted successfully.",
+      data: user.toSafeObject(),
+    });
+  } catch (error) {
+    logger.error("Delete avatar error:", { error });
+    return sendServerError(res, "Failed to delete avatar.", error);
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// 🖼️ COVER IMAGE MANAGEMENT
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Upload/Update Cover Image
+ * @route   POST /api/users/me/cover
+ * @access  Private (User)
+ */
+const uploadCoverImageController = async (req, res) => {
+  try {
+    if (!req.file) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Please upload an image file."
+      );
+    }
+
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      cleanupFile(req.file.path);
+      return sendErrorResponse(res, StatusCodes.NOT_FOUND, "User not found.");
+    }
+
+    if (user.coverImage?.path) {
+      cleanupFile(user.coverImage.path);
+    }
+
+    user.coverImage = {
+      filename: req.file.filename,
+      url: `${req.protocol}://${req.get("host")}/uploads/covers/${
+        req.file.filename
+      }`,
+      path: req.file.path,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      uploadedAt: new Date(),
+    };
+
+    await user.save({ validateBeforeSave: false });
+
+    logger.info(
+      `Cover image updated by ${req.user.email} - File: ${req.file.filename}`
+    );
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      message: "Cover image uploaded successfully.",
+      data: {
+        coverImage: user.coverImage,
+        user: user.toSafeObject(),
+      },
+    });
+  } catch (error) {
+    cleanupFile(req.file?.path);
+    return sendServerError(res, "Failed to upload cover image.", error);
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// 📝 COMBINED PROFILE UPDATE
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Update profile with avatar (multipart form data)
+ * @route   PUT /api/users/me/profile
+ * @access  Private (User)
+ */
+const updateProfileWithAvatar = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      cleanupFile(req.file?.path);
+      return sendErrorResponse(res, StatusCodes.NOT_FOUND, "User not found.");
+    }
+
+    const allowedUpdates = [
+      "name",
+      "phone",
+      "title",
+      "department",
+      "location",
+      "bio",
+    ];
+    let hasUpdates = false;
+
+    allowedUpdates.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        user[field] = req.body[field];
+        hasUpdates = true;
+      }
+    });
+
+    if (req.file) {
+      await user.updateAvatar(req.file, req);
+      hasUpdates = true;
+    }
+
+    if (!hasUpdates) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "No fields to update."
+      );
+    }
+
+    await user.save({ validateBeforeSave: false });
+
+    logger.info(`Profile (with avatar) updated by ${req.user.email}`);
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      message: "Profile updated successfully.",
+      data: user.toSafeObject(),
+    });
+  } catch (error) {
+    cleanupFile(req.file?.path);
+    return sendServerError(res, "Failed to update profile with avatar.", error);
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// 📊 STATISTICS & ANALYTICS
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Get user statistics
+ * @route   GET /api/users/stats
+ * @access  Private (Admin/Staff)
+ */
+const getUserStats = async (req, res) => {
+  try {
+    const [roleStats, activeUsers, inactiveUsers, verifiedUsers, totalUsers] =
+      await Promise.all([
+        User.aggregate([
+          {
+            $group: {
+              _id: "$role",
+              count: { $sum: 1 },
+            },
+          },
+        ]),
+        User.countDocuments({ isActive: true }),
+        User.countDocuments({ isActive: false }),
+        User.countDocuments({ isEmailVerified: true }),
+        User.countDocuments(),
+      ]);
+
+    const result = {
+      total: totalUsers,
+      byRole: {
+        admin: 0,
+        staff: 0,
+        user: 0,
+      },
+      byStatus: {
+        active: activeUsers,
+        inactive: inactiveUsers,
+      },
+      verification: {
+        verified: verifiedUsers,
+        unverified: totalUsers - verifiedUsers,
+      },
+    };
+
+    roleStats.forEach((stat) => {
+      if (stat._id) {
+        result.byRole[stat._id] = stat.count;
+      }
+    });
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return sendServerError(res, "Failed to fetch user statistics.", error);
+  }
+};
+
+/**
+ * Bulk user action
+ * @route   POST /api/users/bulk
+ * @access  Private (Admin/Staff)
+ */
+const bulkUserAction = async (req, res) => {
+  try {
+    const { action, userIds } = req.body;
+
+    if (!action || !Array.isArray(userIds) || userIds.length === 0) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Action and userIds array are required."
+      );
+    }
+
+    const invalidIds = userIds.filter((id) => !isValidObjectId(id));
+    if (invalidIds.length > 0) {
+      return sendErrorResponse(
+        res,
+        StatusCodes.BAD_REQUEST,
+        "Invalid user IDs provided.",
+        { invalidIds }
+      );
+    }
+
+    let updateData = {};
+
+    switch (action) {
+      case "activate":
+        updateData = { isActive: true };
+        break;
+      case "deactivate":
+        updateData = { isActive: false };
+        break;
+      case "verify":
+        updateData = { isEmailVerified: true };
+        break;
+      default:
+        return sendErrorResponse(
+          res,
+          StatusCodes.BAD_REQUEST,
+          "Invalid action. Use: activate, deactivate, or verify."
+        );
+    }
+
+    const result = await User.updateMany(
+      { _id: { $in: userIds } },
+      { $set: updateData }
+    );
+
+    logger.info(
+      `Bulk user action '${action}' performed by ${req.user.email} on ${result.modifiedCount} users`
+    );
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      message: `Bulk action '${action}' applied successfully.`,
+      data: {
+        requested: userIds.length,
+        matched: result.matchedCount,
+        modified: result.modifiedCount,
+      },
+    });
+  } catch (error) {
+    return sendServerError(res, "Failed to perform bulk user action.", error);
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// 🔑 PASSWORD RESET (FORGOT / RESET)
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Forgot password - send reset email
+ * @route   POST /api/auth/forgot-password
+ * @access  Public
+ */
+const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return sendErrorResponse(
+      res,
+      StatusCodes.BAD_REQUEST,
+      "Please provide an email address"
+    );
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const user = await User.findOne({
+    email: normalizedEmail,
+    isDeleted: { $ne: true },
+  });
+
+  // Do not reveal whether user exists
+  if (!user) {
+    logger.warn(
+      `Password reset requested for non-existent email: ${normalizedEmail}`
+    );
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      message: "If an account exists, a password reset email has been sent",
     });
   }
+
+  const resetToken = user.getResetPasswordToken();
+  await user.save({ validateBeforeSave: false });
+
+  try {
+    await sendPasswordResetEmail(user, resetToken);
+
+    logger.info(`Password reset email sent to: ${user.email}`);
+
+    await logAuditEvent({
+      action: "FORGOT_PASSWORD_REQUEST",
+      userId: user._id,
+      email: user.email,
+      timestamp: new Date(),
+      ip: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      message: "Password reset email sent",
+    });
+  } catch (error) {
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+    await user.save({ validateBeforeSave: false });
+
+    logger.error(`Forgot password email error: ${error.message}`, { error });
+
+    return sendServerError(
+      res,
+      "Failed to send reset email. Please try again later.",
+      error
+    );
+  }
+});
+
+/**
+ * Reset password using token
+ * @route   POST /api/auth/reset-password
+ * @access  Public
+ */
+const resetPassword = asyncHandler(async (req, res) => {
+  const { token, password } = req.body;
+
+  if (!token || !password) {
+    return sendErrorResponse(
+      res,
+      StatusCodes.BAD_REQUEST,
+      "Token and new password are required"
+    );
+  }
+
+  if (password.trim().length < 6) {
+    return sendErrorResponse(
+      res,
+      StatusCodes.BAD_REQUEST,
+      "Password must be at least 6 characters"
+    );
+  }
+
+  const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+  const user = await User.findOne({
+    resetPasswordToken: hashedToken,
+    resetPasswordExpire: { $gt: Date.now() },
+    isDeleted: { $ne: true },
+  }).select("+password");
+
+  if (!user) {
+    logger.warn("Invalid or expired reset token used");
+    return sendErrorResponse(
+      res,
+      StatusCodes.BAD_REQUEST,
+      "Invalid or expired reset token"
+    );
+  }
+
+  user.password = password.trim();
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpire = undefined;
+  await user.save();
+
+  try {
+    await sendPasswordResetConfirmation(user);
+  } catch (error) {
+    logger.error(`Password reset confirmation email error: ${error.message}`, {
+      error,
+    });
+  }
+
+  logger.info(`Password reset successful for: ${user.email}`);
+
+  await logAuditEvent({
+    action: "PASSWORD_RESET",
+    userId: user._id,
+    email: user.email,
+    timestamp: new Date(),
+    ip: req.ip,
+  });
+
+  return res.status(StatusCodes.OK).json({
+    success: true,
+    message: "Password has been reset successfully",
+  });
+});
+
+/**
+ * Forgot password - send reset email
+ * Route: POST /api/auth/forgot-password
+ * Access: Public
+ */
+exports.forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: "Please provide an email address",
+    });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const user = await User.findOne({
+    email: normalizedEmail,
+    isDeleted: { $ne: true },
+  });
+
+  // Do not reveal whether user exists (for security)
+  if (!user) {
+    logger.warn(
+      `Password reset requested for non-existent email: ${normalizedEmail}`
+    );
+    return res.status(200).json({
+      success: true,
+      message: "If an account exists, a password reset email has been sent",
+    });
+  }
+
+  const resetToken = user.getResetPasswordToken();
+  await user.save({ validateBeforeSave: false });
+
+  try {
+    await sendPasswordResetEmail(user, resetToken);
+
+    logger.info(`Password reset email sent to: ${user.email}`);
+
+    await logAuditEvent({
+      action: "FORGOT_PASSWORD_REQUEST",
+      userId: user._id,
+      email: user.email,
+      timestamp: new Date(),
+      ip: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password reset email sent",
+    });
+  } catch (error) {
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+    await user.save({ validateBeforeSave: false });
+
+    logger.error(`Forgot password email error: ${error.message}`, { error });
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send reset email. Please try again later.",
+    });
+  }
+});
+
+/**
+ * Reset password using token
+ * Route: POST /api/auth/reset-password
+ * Access: Public
+ */
+exports.resetPassword = asyncHandler(async (req, res) => {
+  const { token, password } = req.body;
+
+  if (!token || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Token and new password are required",
+    });
+  }
+
+  if (password.trim().length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: "Password must be at least 6 characters",
+    });
+  }
+
+  const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+  const user = await User.findOne({
+    resetPasswordToken: hashedToken,
+    resetPasswordExpire: { $gt: Date.now() },
+    isDeleted: { $ne: true },
+  }).select("+password");
+
+  if (!user) {
+    logger.warn("Invalid or expired reset token used");
+    return res.status(400).json({
+      success: false,
+      message: "Invalid or expired reset token",
+    });
+  }
+
+  user.password = password.trim();
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpire = undefined;
+  await user.save();
+
+  try {
+    await sendPasswordResetConfirmation(user);
+  } catch (error) {
+    logger.error(`Password reset confirmation email error: ${error.message}`, {
+      error,
+    });
+  }
+
+  logger.info(`Password reset successful for: ${user.email}`);
+
+  await logAuditEvent({
+    action: "PASSWORD_RESET",
+    userId: user._id,
+    email: user.email,
+    timestamp: new Date(),
+    ip: req.ip,
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: "Password has been reset successfully",
+  });
+});
+
+// ════════════════════════════════════════════════════════════════
+// 📤 EXPORTS
+// ════════════════════════════════════════════════════════════════
+
+module.exports = {
+  // User Management
+  getUsers,
+  getUser,
+  updateUser,
+  deleteUser,
+
+  // Profile Management
+  getProfile,
+  updateProfile,
+  updateProfileWithAvatar,
+
+  // Avatar Management
+  uploadAvatarController,
+  deleteAvatar,
+
+  // Cover Image Management
+  uploadCoverImageController,
+
+  // Statistics & Bulk Actions
+  getUserStats,
+  bulkUserAction,
+
+  // Password Reset
+  forgotPassword,
+  resetPassword,
 };
