@@ -1,642 +1,488 @@
-/**
- * ================================================================
- * 📝 COMPLAINT FORM - File upload with preview and validation
- * ================================================================
- */
-
-import React, { useState, useCallback, useEffect } from "react";
-import { toast } from "react-toastify";
-import { ComplaintAPI } from "../../api/api";
-import {
-  COMPLAINT_CATEGORY,
-  COMPLAINT_PRIORITY,
-  CATEGORY_LABELS,
-  PRIORITY_LABELS,
-  ATTACHMENT_CONFIG,
-  validateFiles,
-  formatFileSize,
-  getFileIcon,
-} from "../../utils/constants";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useForm } from "react-hook-form";
 import {
   FiUpload,
   FiX,
   FiFileText,
   FiAlertCircle,
-  FiCheckCircle,
   FiLoader,
   FiSend,
   FiEye,
   FiDownload,
+  FiPaperclip,
 } from "react-icons/fi";
+import { ComplaintAPI } from "../../api/complaints";
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
+const FALLBACK_CATEGORIES = [
+  "technical",
+  "billing",
+  "service",
+  "product",
+  "harassment",
+  "safety",
+  "other",
+];
 
-const FIELD_LIMITS = {
-  title: { min: 5, max: 100 },
-  description: { min: 20, max: 1000 },
-  name: { min: 2, max: 50 },
-  phone: { length: 10 },
+const FALLBACK_PRIORITIES = ["low", "medium", "high", "urgent"];
+
+const ATTACHMENTS = {
+  MAX_FILES: 10,
+  MAX_SIZE_MB: 10,
+  ACCEPT: "image/*,application/pdf,.doc,.docx,.txt",
 };
 
-const INITIAL_FORM_STATE = {
-  title: "",
-  description: "",
-  category: COMPLAINT_CATEGORY.TECHNICAL,
-  priority: COMPLAINT_PRIORITY.MEDIUM,
-  contactInfo: {
-    name: "",
-    email: "",
-    phone: "",
-  },
+const labelize = (str) =>
+  String(str || "")
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+
+const formatFileSize = (bytes = 0) => {
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
 };
 
-// ============================================================================
-// VALIDATION
-// ============================================================================
+const isImage = (file) =>
+  String(file?.type || "")
+    .toLowerCase()
+    .startsWith("image/");
 
-const validateField = (name, value) => {
-  const errors = {};
-
-  switch (name) {
-    case "title": {
-      const trimmed = value?.trim();
-      if (!trimmed) {
-        errors.title = "Title is required";
-      } else if (trimmed.length < FIELD_LIMITS.title.min) {
-        errors.title = `Minimum ${FIELD_LIMITS.title.min} characters required`;
-      } else if (value.length > FIELD_LIMITS.title.max) {
-        errors.title = `Maximum ${FIELD_LIMITS.title.max} characters allowed`;
-      }
-      break;
-    }
-
-    case "description": {
-      const trimmed = value?.trim();
-      if (!trimmed) {
-        errors.description = "Description is required";
-      } else if (trimmed.length < FIELD_LIMITS.description.min) {
-        errors.description = `Minimum ${FIELD_LIMITS.description.min} characters required`;
-      } else if (value.length > FIELD_LIMITS.description.max) {
-        errors.description = `Maximum ${FIELD_LIMITS.description.max} characters allowed`;
-      }
-      break;
-    }
-
-    case "contactInfo.name": {
-      const trimmed = value?.trim();
-      if (!trimmed) {
-        errors["contactInfo.name"] = "Name is required";
-      } else if (trimmed.length < FIELD_LIMITS.name.min) {
-        errors["contactInfo.name"] =
-          `Minimum ${FIELD_LIMITS.name.min} characters required`;
-      }
-      break;
-    }
-
-    case "contactInfo.email": {
-      if (!value) {
-        errors["contactInfo.email"] = "Email is required";
-      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-        errors["contactInfo.email"] = "Invalid email address";
-      }
-      break;
-    }
-
-    case "contactInfo.phone": {
-      if (value && !/^\d{10}$/.test(value)) {
-        errors["contactInfo.phone"] = "Must be 10 digits";
-      }
-      break;
-    }
-
-    default:
-      break;
-  }
-
-  return errors;
-};
-
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-const FieldStatus = ({ value, error, touched }) => {
-  if (!touched || !value) return null;
-  return error ? (
-    <FiAlertCircle className="w-5 h-5 text-red-500" />
-  ) : (
-    <FiCheckCircle className="w-5 h-5 text-green-500" />
-  );
-};
-
-const CharacterCounter = ({ current, max }) => {
-  const percentage = (current / max) * 100;
-  const colorClass =
-    percentage > 90
-      ? "text-red-600"
-      : percentage > 75
-        ? "text-amber-600"
-        : "text-gray-500";
-
+function FieldError({ message }) {
+  if (!message) return null;
   return (
-    <span className={`text-xs font-medium ${colorClass}`}>
-      {current}/{max}
-    </span>
+    <p className="mt-1 text-xs font-semibold text-rose-600 flex items-center gap-1.5">
+      <FiAlertCircle className="w-4 h-4" />
+      {message}
+    </p>
   );
-};
+}
 
-// File preview with modal
-const FilePreview = ({ file, previewUrl, index, onRemove, onPreview }) => {
-  const isImage = file.type.startsWith("image/");
-  const icon = getFileIcon(file.type);
+function PreviewModal({ open, file, url, onClose }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
 
-  return (
-    <div className="relative group bg-white border-2 border-gray-200 rounded-lg p-3 hover:border-blue-300 transition-all">
-      <button
-        type="button"
-        onClick={() => onRemove(index)}
-        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 z-10"
-      >
-        <FiX className="w-3 h-3" />
-      </button>
+  if (!open || !file) return null;
 
-      {isImage && previewUrl ? (
-        <div className="relative">
-          <img
-            src={previewUrl}
-            alt={file.name}
-            className="w-full h-24 object-cover rounded cursor-pointer"
-            onClick={() => onPreview(file, previewUrl)}
-          />
-          <button
-            type="button"
-            onClick={() => onPreview(file, previewUrl)}
-            className="absolute inset-0 bg-black/50 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center rounded"
-          >
-            <FiEye className="w-6 h-6 text-white" />
-          </button>
-        </div>
-      ) : (
-        <div className="w-full h-24 bg-gray-100 rounded flex items-center justify-center">
-          <FiFileText className="w-10 h-10 text-gray-400" />
-        </div>
-      )}
-
-      <p
-        className="text-xs text-gray-700 font-medium truncate mt-2"
-        title={file.name}
-      >
-        {file.name}
-      </p>
-      <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
-    </div>
-  );
-};
-
-// Preview Modal
-const PreviewModal = ({ file, previewUrl, onClose }) => {
-  if (!file) return null;
-
-  const isImage = file.type.startsWith("image/");
+  const img = isImage(file);
 
   return (
     <div
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm p-4 grid place-items-center"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
     >
       <div
-        className="bg-white rounded-xl max-w-4xl max-h-[90vh] overflow-auto"
+        className="w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-2xl bg-white border border-gray-200 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
-          <div>
-            <h3 className="font-semibold text-gray-900">{file.name}</h3>
-            <p className="text-sm text-gray-500">{formatFileSize(file.size)}</p>
+        <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-extrabold text-gray-900 truncate">
+              {file.name}
+            </p>
+            <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
           </div>
+
           <div className="flex items-center gap-2">
-            <a
-              href={previewUrl}
-              download={file.name}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              title="Download"
-            >
-              <FiDownload className="h-5 w-5 text-gray-600" />
-            </a>
+            {url ? (
+              <a
+                href={url}
+                download={file.name}
+                className="p-2 rounded-xl hover:bg-gray-100 transition"
+                title="Download"
+              >
+                <FiDownload className="h-5 w-5 text-gray-700" />
+              </a>
+            ) : null}
+
             <button
+              type="button"
               onClick={onClose}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              className="p-2 rounded-xl hover:bg-gray-100 transition"
+              title="Close"
             >
-              <FiX className="h-5 w-5 text-gray-600" />
+              <FiX className="h-5 w-5 text-gray-700" />
             </button>
           </div>
         </div>
 
-        <div className="p-6">
-          {isImage ? (
+        <div className="p-5 overflow-auto max-h-[80vh]">
+          {img && url ? (
             <img
-              src={previewUrl}
+              src={url}
               alt={file.name}
-              className="max-w-full h-auto rounded-lg"
+              className="max-w-full h-auto rounded-xl"
             />
           ) : (
-            <div className="text-center py-12">
-              <FiFileText className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600">Preview not available</p>
-              <a
-                href={previewUrl}
-                download={file.name}
-                className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                <FiDownload className="h-4 w-4" />
-                Download File
-              </a>
+            <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-10 text-center">
+              <FiFileText className="h-14 w-14 text-gray-400 mx-auto" />
+              <p className="mt-3 text-sm font-semibold text-gray-800">
+                Preview not available
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                Download the file to view it.
+              </p>
+              {url ? (
+                <a
+                  href={url}
+                  download={file.name}
+                  className="inline-flex items-center gap-2 mt-4 px-4 py-2 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition"
+                >
+                  <FiDownload className="h-4 w-4" />
+                  Download
+                </a>
+              ) : null}
             </div>
           )}
         </div>
       </div>
     </div>
   );
-};
+}
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
+function AttachmentCard({ item, onRemove, onPreview }) {
+  const { file, previewUrl } = item;
+  const img = isImage(file);
 
-/**
- * Props:
- * - currentUser (optional, if you want to prefill contact info)
- * - onSubmitStart: () => void
- * - onSubmitSuccess: (complaint) => void
- * - onSubmitError: (message) => void
- * - isSubmitting: boolean (controlled by parent)
- */
-const ComplaintForm = ({
+  return (
+    <div className="group relative rounded-2xl border border-gray-200 bg-white overflow-hidden hover:border-blue-300 hover:shadow-md transition">
+      <button
+        type="button"
+        onClick={onRemove}
+        className="absolute top-2 right-2 z-10 rounded-full bg-white/90 border border-gray-200 p-1.5 opacity-0 group-hover:opacity-100 transition"
+        title="Remove"
+      >
+        <FiX className="h-4 w-4 text-gray-700" />
+      </button>
+
+      <button
+        type="button"
+        onClick={onPreview}
+        className="absolute top-2 left-2 z-10 rounded-full bg-white/90 border border-gray-200 p-1.5 opacity-0 group-hover:opacity-100 transition"
+        title="Preview"
+      >
+        <FiEye className="h-4 w-4 text-gray-700" />
+      </button>
+
+      <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden">
+        {img && previewUrl ? (
+          <img
+            src={previewUrl}
+            alt={file.name}
+            className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
+          />
+        ) : (
+          <FiFileText className="h-10 w-10 text-gray-400" />
+        )}
+      </div>
+
+      <div className="p-3 border-t border-gray-100">
+        <p
+          className="text-xs font-semibold text-gray-800 truncate"
+          title={file.name}
+        >
+          {file.name}
+        </p>
+        <p className="text-[11px] text-gray-500">{formatFileSize(file.size)}</p>
+      </div>
+    </div>
+  );
+}
+
+function useAttachments({ onError }) {
+  const [items, setItems] = useState([]); // { file, previewUrl }
+  const urlsRef = useRef(new Set());
+
+  useEffect(() => {
+    return () => {
+      urlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+      urlsRef.current.clear();
+    };
+  }, []);
+
+  const addFiles = useCallback(
+    (incoming) => {
+      const list = Array.from(incoming || []);
+      if (!list.length) return;
+
+      setItems((prev) => {
+        if (prev.length + list.length > ATTACHMENTS.MAX_FILES) {
+          onError?.(`Maximum ${ATTACHMENTS.MAX_FILES} attachments allowed`);
+          return prev;
+        }
+
+        for (const f of list) {
+          const sizeMb = f.size / (1024 * 1024);
+          if (sizeMb > ATTACHMENTS.MAX_SIZE_MB) {
+            onError?.(`${f.name} is larger than ${ATTACHMENTS.MAX_SIZE_MB}MB`);
+            return prev;
+          }
+        }
+
+        const next = list.map((file) => {
+          let previewUrl = null;
+          if (isImage(file)) {
+            previewUrl = URL.createObjectURL(file);
+            urlsRef.current.add(previewUrl);
+          }
+          return { file, previewUrl };
+        });
+
+        return [...prev, ...next];
+      });
+    },
+    [onError]
+  );
+
+  const removeAt = useCallback((idx) => {
+    setItems((prev) => {
+      const copy = [...prev];
+      const removed = copy[idx];
+      if (removed?.previewUrl) {
+        URL.revokeObjectURL(removed.previewUrl);
+        urlsRef.current.delete(removed.previewUrl);
+      }
+      copy.splice(idx, 1);
+      return copy;
+    });
+  }, []);
+
+  const clear = useCallback(() => {
+    setItems((prev) => {
+      prev.forEach((it) => it.previewUrl && URL.revokeObjectURL(it.previewUrl));
+      urlsRef.current.clear();
+      return [];
+    });
+  }, []);
+
+  return { items, addFiles, removeAt, clear };
+}
+
+export default function ComplaintForm({
   currentUser,
+  categoryOptions = FALLBACK_CATEGORIES,
+  priorityOptions = FALLBACK_PRIORITIES,
   onSubmitStart,
   onSubmitSuccess,
   onSubmitError,
   isSubmitting = false,
-}) => {
-  const [formData, setFormData] = useState(() => {
-    if (currentUser) {
-      return {
-        ...INITIAL_FORM_STATE,
-        contactInfo: {
-          name: currentUser.name || "",
-          email: currentUser.email || "",
-          phone: currentUser.phone || "",
-        },
-      };
-    }
-    return INITIAL_FORM_STATE;
+}) {
+  const categories = useMemo(
+    () =>
+      Array.isArray(categoryOptions) && categoryOptions.length
+        ? categoryOptions
+        : FALLBACK_CATEGORIES,
+    [categoryOptions]
+  );
+
+  const priorities = useMemo(
+    () =>
+      Array.isArray(priorityOptions) && priorityOptions.length
+        ? priorityOptions
+        : FALLBACK_PRIORITIES,
+    [priorityOptions]
+  );
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    watch,
+    formState: { errors },
+  } = useForm({
+    defaultValues: {
+      title: "",
+      description: "",
+      category: "other",
+      priority: "medium",
+      contactName: currentUser?.name || "",
+      contactEmail: currentUser?.email || "",
+      contactPhone: currentUser?.phone || "",
+    },
+    mode: "onChange",
   });
 
-  const [attachments, setAttachments] = useState([]);
-  const [previewUrls, setPreviewUrls] = useState([]);
-  const [fieldErrors, setFieldErrors] = useState({});
-  const [touchedFields, setTouchedFields] = useState({});
-  const [previewFile, setPreviewFile] = useState(null);
+  useEffect(() => {
+    reset((prev) => ({
+      ...prev,
+      contactName: currentUser?.name || "",
+      contactEmail: currentUser?.email || "",
+      contactPhone: currentUser?.phone || "",
+    }));
+  }, [currentUser, reset]);
 
-  // Handle input change
-  const handleChange = useCallback(
-    (e) => {
-      const { name, value } = e.target;
+  const titleLen = String(watch("title") || "").length;
+  const descLen = String(watch("description") || "").length;
 
-      if (name.startsWith("contactInfo.")) {
-        const key = name.split(".")[1];
-        setFormData((prev) => ({
-          ...prev,
-          contactInfo: { ...prev.contactInfo, [key]: value },
-        }));
-      } else {
-        setFormData((prev) => ({ ...prev, [name]: value }));
-      }
+  const { items, addFiles, removeAt, clear } = useAttachments({
+    onError: onSubmitError,
+  });
+  const [preview, setPreview] = useState({ open: false, file: null, url: "" });
 
-      if (touchedFields[name]) {
-        const errors = validateField(name, value);
-        setFieldErrors((prev) => {
-          const updated = { ...prev };
-          if (Object.keys(errors).length === 0) {
-            delete updated[name];
-          } else {
-            Object.assign(updated, errors);
-          }
-          return updated;
-        });
-      }
-    },
-    [touchedFields]
-  );
-
-  // Handle blur
-  const handleBlur = useCallback((e) => {
-    const { name, value } = e.target;
-    setTouchedFields((prev) => ({ ...prev, [name]: true }));
-
-    const errors = validateField(name, value);
-    setFieldErrors((prev) => {
-      const updated = { ...prev };
-      if (Object.keys(errors).length === 0) {
-        delete updated[name];
-      } else {
-        Object.assign(updated, errors);
-      }
-      return updated;
-    });
-  }, []);
-
-  // Handle file upload
-  const handleFileChange = useCallback((e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-
-    const validation = validateFiles(files, ATTACHMENT_CONFIG);
-    if (!validation.valid) {
-      toast.error(validation.errors[0], { toastId: "file-error" });
-      e.target.value = "";
-      return;
-    }
-
-    setAttachments((prev) => {
-      const newFiles = [...prev, ...files];
-      if (newFiles.length > ATTACHMENT_CONFIG.MAX_FILES) {
-        toast.error(`Maximum ${ATTACHMENT_CONFIG.MAX_FILES} files allowed`, {
-          toastId: "max-files",
-        });
-        return prev;
-      }
-      return newFiles;
-    });
-
-    // Create preview URLs
-    const newPreviews = files.map((file) =>
-      file.type.startsWith("image/") ? URL.createObjectURL(file) : null
-    );
-    setPreviewUrls((prev) => [...prev, ...newPreviews]);
-
-    toast.success(`${files.length} file(s) added`, { toastId: "files-added" });
+  const onFileInputChange = (e) => {
+    addFiles(e.target.files);
     e.target.value = "";
-  }, []);
+  };
 
-  // Remove attachment
-  const removeAttachment = useCallback((index) => {
-    setAttachments((prev) => prev.filter((_, i) => i !== index));
-    setPreviewUrls((prev) => {
-      const url = prev[index];
-      if (url) URL.revokeObjectURL(url);
-      return prev.filter((_, i) => i !== index);
-    });
-    toast.info("File removed", { toastId: "file-removed" });
-  }, []);
-
-  // Open preview
-  const openPreview = useCallback((file, url) => {
-    setPreviewFile({ file, url });
-  }, []);
-
-  // Validate form
-  const validateForm = useCallback(() => {
-    const allErrors = {};
-
-    ["title", "description"].forEach((field) => {
-      Object.assign(allErrors, validateField(field, formData[field]));
-    });
-
-    ["name", "email", "phone"].forEach((field) => {
-      Object.assign(
-        allErrors,
-        validateField(`contactInfo.${field}`, formData.contactInfo[field])
-      );
-    });
-
-    setFieldErrors(allErrors);
-    setTouchedFields({
-      title: true,
-      description: true,
-      "contactInfo.name": true,
-      "contactInfo.email": true,
-      "contactInfo.phone": true,
-    });
-
-    return Object.keys(allErrors).length === 0;
-  }, [formData]);
-
-  // Handle submit
-  const handleSubmit = useCallback(
-    async (e) => {
-      e.preventDefault();
-
-      if (!validateForm()) {
-        toast.error("Please fix all errors", {
-          toastId: "validation-error",
-        });
-        onSubmitError?.("Validation failed");
-        return;
-      }
-
+  const submit = async (values) => {
+    try {
       onSubmitStart?.();
 
-      try {
-        const submitData = new FormData();
-        submitData.append("title", formData.title.trim());
-        submitData.append("description", formData.description.trim());
-        submitData.append("category", formData.category);
-        submitData.append("priority", formData.priority);
-        submitData.append("contactInfo", JSON.stringify(formData.contactInfo));
+      const category = String(values.category || "other")
+        .trim()
+        .toLowerCase();
 
-        attachments.forEach((file) => {
-          submitData.append("attachments", file);
-        });
+      const fd = new FormData();
+      fd.append("title", String(values.title || "").trim());
+      fd.append("description", String(values.description || "").trim());
+      fd.append("category", category);
+      fd.append("priority", String(values.priority || "medium"));
 
-        const response = await ComplaintAPI.create(submitData);
+      fd.append(
+        "contactInfo",
+        JSON.stringify({
+          name: String(values.contactName || "").trim(),
+          email: String(values.contactEmail || "")
+            .trim()
+            .toLowerCase(),
+          phone: String(values.contactPhone || "").trim(),
+        })
+      );
 
-        if (!response.success) {
-          const msg = response.message || "Failed to submit complaint";
-          toast.error(msg, { toastId: "submit-error" });
-          onSubmitError?.(msg);
-          return;
-        }
+      items.forEach(({ file }) => fd.append("attachments", file));
 
-        // Cleanup previews
-        previewUrls.forEach((url) => url && URL.revokeObjectURL(url));
+      const res = await ComplaintAPI.create(fd);
+      const payload = res?.data ?? res;
+      if (payload?.success === false)
+        throw new Error(payload?.message || "Failed to submit complaint");
 
-        // Reset form local state
-        setFormData(
-          currentUser
-            ? {
-                ...INITIAL_FORM_STATE,
-                contactInfo: {
-                  name: currentUser.name || "",
-                  email: currentUser.email || "",
-                  phone: currentUser.phone || "",
-                },
-              }
-            : INITIAL_FORM_STATE
-        );
-        setAttachments([]);
-        setPreviewUrls([]);
-        setFieldErrors({});
-        setTouchedFields({});
+      reset({
+        title: "",
+        description: "",
+        category: "other",
+        priority: "medium",
+        contactName: currentUser?.name || "",
+        contactEmail: currentUser?.email || "",
+        contactPhone: currentUser?.phone || "",
+      });
 
-        onSubmitSuccess?.(response.data);
-      } catch (error) {
-        const msg = error.message || "Failed to submit complaint";
-        toast.error(msg, { toastId: "submit-error" });
-        onSubmitError?.(msg);
-      }
-    },
-    [
-      formData,
-      attachments,
-      previewUrls,
-      validateForm,
-      onSubmitStart,
-      onSubmitSuccess,
-      onSubmitError,
-      currentUser,
-    ]
-  );
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      previewUrls.forEach((url) => url && URL.revokeObjectURL(url));
-    };
-  }, [previewUrls]);
+      clear();
+      onSubmitSuccess?.(payload?.data ?? payload);
+    } catch (e) {
+      onSubmitError?.(e?.message || "Failed to submit complaint");
+    }
+  };
 
   return (
     <>
-      <form onSubmit={handleSubmit} className="space-y-6" noValidate>
+      <form onSubmit={handleSubmit(submit)} className="space-y-6" noValidate>
         {/* Title */}
-        <div>
-          <div className="flex justify-between items-center mb-2">
-            <label
-              htmlFor="title"
-              className="block text-sm font-semibold text-gray-700"
-            >
-              Title <span className="text-red-500">*</span>
+        <div className="rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex items-center justify-between gap-3">
+            <label className="text-sm font-extrabold text-gray-900">
+              Title <span className="text-rose-600">*</span>
             </label>
-            <CharacterCounter
-              current={formData.title.length}
-              max={FIELD_LIMITS.title.max}
-            />
+            <span className="text-xs font-semibold text-gray-500">
+              {titleLen}/200
+            </span>
           </div>
-          <div className="relative">
-            <input
-              id="title"
-              name="title"
-              type="text"
-              value={formData.title}
-              onChange={handleChange}
-              onBlur={handleBlur}
-              placeholder="Brief description of your complaint"
-              maxLength={FIELD_LIMITS.title.max}
-              className={`w-full px-4 py-2.5 pr-12 border-2 rounded-lg focus:ring-2 focus:outline-none transition-all ${
-                fieldErrors.title && touchedFields.title
-                  ? "border-red-400 focus:ring-red-200 bg-red-50"
-                  : touchedFields.title && formData.title
-                    ? "border-green-400 focus:ring-green-200"
-                    : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
-              }`}
-            />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2">
-              <FieldStatus
-                value={formData.title}
-                error={fieldErrors.title}
-                touched={touchedFields.title}
-              />
-            </div>
-          </div>
-          {fieldErrors.title && touchedFields.title && (
-            <p className="mt-2 text-sm text-red-600 flex items-center gap-1.5">
-              <FiAlertCircle className="w-4 h-4" />
-              {fieldErrors.title}
-            </p>
-          )}
+
+          <input
+            className={[
+              "mt-3 w-full rounded-xl border px-4 py-3 text-sm font-semibold outline-none transition",
+              errors.title
+                ? "border-rose-300 bg-rose-50"
+                : "border-gray-200 bg-gray-50 focus:bg-white focus:border-blue-400",
+            ].join(" ")}
+            placeholder="Short summary of the issue…"
+            maxLength={200}
+            {...register("title", {
+              required: "Title is required",
+              minLength: { value: 5, message: "Min 5 characters" },
+              maxLength: { value: 200, message: "Max 200 characters" },
+            })}
+          />
+          <FieldError message={errors.title?.message} />
         </div>
 
         {/* Description */}
-        <div>
-          <div className="flex justify-between items-center mb-2">
-            <label
-              htmlFor="description"
-              className="block text-sm font-semibold text-gray-700"
-            >
-              Description <span className="text-red-500">*</span>
+        <div className="rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex items-center justify-between gap-3">
+            <label className="text-sm font-extrabold text-gray-900">
+              Description <span className="text-rose-600">*</span>
             </label>
-            <CharacterCounter
-              current={formData.description.length}
-              max={FIELD_LIMITS.description.max}
-            />
+            <span className="text-xs font-semibold text-gray-500">
+              {descLen}/2000
+            </span>
           </div>
+
           <textarea
-            id="description"
-            name="description"
-            value={formData.description}
-            onChange={handleChange}
-            onBlur={handleBlur}
             rows={6}
-            maxLength={FIELD_LIMITS.description.max}
-            placeholder="Provide detailed information..."
-            className={`w-full px-4 py-2.5 border-2 rounded-lg focus:ring-2 focus:outline-none resize-none transition-all ${
-              fieldErrors.description && touchedFields.description
-                ? "border-red-400 focus:ring-red-200 bg-red-50"
-                : touchedFields.description && formData.description
-                  ? "border-green-400 focus:ring-green-200"
-                  : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
-            }`}
+            className={[
+              "mt-3 w-full rounded-xl border px-4 py-3 text-sm outline-none transition resize-none",
+              errors.description
+                ? "border-rose-300 bg-rose-50"
+                : "border-gray-200 bg-gray-50 focus:bg-white focus:border-blue-400",
+            ].join(" ")}
+            placeholder="Explain the problem clearly (what happened, where, when)…"
+            maxLength={2000}
+            {...register("description", {
+              required: "Description is required",
+              minLength: { value: 10, message: "Min 10 characters" },
+              maxLength: { value: 2000, message: "Max 2000 characters" },
+            })}
           />
-          {fieldErrors.description && touchedFields.description && (
-            <p className="mt-2 text-sm text-red-600 flex items-center gap-1.5">
-              <FiAlertCircle className="w-4 h-4" />
-              {fieldErrors.description}
-            </p>
-          )}
+          <FieldError message={errors.description?.message} />
         </div>
 
-        {/* Category & Priority */}
+        {/* Category + Priority */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label
-              htmlFor="category"
-              className="block text-sm font-semibold text-gray-700 mb-2"
-            >
-              Category <span className="text-red-500">*</span>
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <label className="text-sm font-extrabold text-gray-900">
+              Category <span className="text-rose-600">*</span>
             </label>
+
             <select
-              id="category"
-              name="category"
-              value={formData.category}
-              onChange={handleChange}
-              className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none bg-white"
+              className={[
+                "mt-3 w-full rounded-xl border px-4 py-3 text-sm font-semibold outline-none transition bg-white",
+                errors.category
+                  ? "border-rose-300"
+                  : "border-gray-200 focus:border-blue-400",
+              ].join(" ")}
+              {...register("category", { required: "Category is required" })}
             >
-              {Object.values(COMPLAINT_CATEGORY).map((cat) => (
-                <option key={cat} value={cat}>
-                  {CATEGORY_LABELS[cat]}
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {labelize(c)}
                 </option>
               ))}
             </select>
+            <FieldError message={errors.category?.message} />
           </div>
 
-          <div>
-            <label
-              htmlFor="priority"
-              className="block text-sm font-semibold text-gray-700 mb-2"
-            >
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <label className="text-sm font-extrabold text-gray-900">
               Priority
             </label>
             <select
-              id="priority"
-              name="priority"
-              value={formData.priority}
-              onChange={handleChange}
-              className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none bg-white"
+              className="mt-3 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm font-semibold outline-none transition bg-white focus:border-blue-400"
+              {...register("priority")}
             >
-              {Object.values(COMPLAINT_PRIORITY).map((pri) => (
-                <option key={pri} value={pri}>
-                  {PRIORITY_LABELS[pri]}
+              {priorities.map((p) => (
+                <option key={p} value={p}>
+                  {labelize(p)}
                 </option>
               ))}
             </select>
@@ -644,170 +490,146 @@ const ComplaintForm = ({
         </div>
 
         {/* Attachments */}
-        <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 bg-gray-50">
-          <div className="text-center">
-            <FiUpload className="mx-auto h-12 w-12 text-blue-500 mb-3" />
+        <div className="rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-extrabold text-gray-900">
+                Attachments (optional)
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                Up to {ATTACHMENTS.MAX_FILES} files, max{" "}
+                {ATTACHMENTS.MAX_SIZE_MB}MB each.
+              </p>
+            </div>
+
             <label
-              htmlFor="file-upload"
-              className={`relative cursor-pointer bg-white rounded-lg px-6 py-2.5 inline-block font-semibold text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition-all ${
-                attachments.length >= ATTACHMENT_CONFIG.MAX_FILES
-                  ? "opacity-50 cursor-not-allowed"
-                  : ""
-              }`}
+              className={[
+                "inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-extrabold transition cursor-pointer",
+                items.length >= ATTACHMENTS.MAX_FILES
+                  ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                  : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
+              ].join(" ")}
             >
-              <span>Upload Attachments</span>
+              <FiUpload className="h-4 w-4" />
+              Add files
               <input
-                id="file-upload"
                 type="file"
                 multiple
-                accept={ATTACHMENT_CONFIG.ALLOWED_TYPES.join(",")}
-                onChange={handleFileChange}
-                disabled={attachments.length >= ATTACHMENT_CONFIG.MAX_FILES}
-                className="sr-only"
+                accept={ATTACHMENTS.ACCEPT}
+                onChange={onFileInputChange}
+                disabled={items.length >= ATTACHMENTS.MAX_FILES}
+                className="hidden"
               />
             </label>
-            <p className="text-sm text-gray-600 mt-2">
-              {ATTACHMENT_CONFIG.ALLOWED_EXTENSIONS.join(", ")} • Max{" "}
-              {ATTACHMENT_CONFIG.MAX_SIZE_MB}MB
-            </p>
-            <p className="text-xs text-gray-500 mt-1">
-              {attachments.length}/{ATTACHMENT_CONFIG.MAX_FILES} files
-            </p>
           </div>
 
-          {attachments.length > 0 && (
-            <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              {attachments.map((file, index) => (
-                <FilePreview
-                  key={`${file.name}-${index}`}
-                  file={file}
-                  previewUrl={previewUrls[index]}
-                  index={index}
-                  onRemove={removeAttachment}
-                  onPreview={openPreview}
+          {items.length > 0 ? (
+            <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+              {items.map((item, idx) => (
+                <AttachmentCard
+                  key={`${item.file.name}-${idx}`}
+                  item={item}
+                  onRemove={() => removeAt(idx)}
+                  onPreview={() =>
+                    setPreview({
+                      open: true,
+                      file: item.file,
+                      url: item.previewUrl || "",
+                    })
+                  }
                 />
               ))}
+            </div>
+          ) : (
+            <div className="mt-4 rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-8 text-center">
+              <FiPaperclip className="h-10 w-10 text-gray-300 mx-auto" />
+              <p className="mt-2 text-sm font-semibold text-gray-700">
+                No attachments added
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                Add screenshots or documents if they help.
+              </p>
             </div>
           )}
         </div>
 
-        {/* Contact Info */}
-        <div className="border-t-2 pt-6 space-y-4">
-          <h3 className="text-lg font-bold text-gray-900">
-            Contact Information
-          </h3>
+        {/* Contact info */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5">
+          <p className="text-sm font-extrabold text-gray-900">
+            Contact information
+          </p>
 
-          <div>
-            <label
-              htmlFor="contactName"
-              className="block text-sm font-semibold text-gray-700 mb-2"
-            >
-              Name <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-gray-600 uppercase">
+                Name *
+              </label>
               <input
-                id="contactName"
-                name="contactInfo.name"
-                type="text"
-                value={formData.contactInfo.name}
-                onChange={handleChange}
-                onBlur={handleBlur}
-                placeholder="Your full name"
-                className={`w-full px-4 py-2.5 pr-12 border-2 rounded-lg focus:ring-2 focus:outline-none transition-all ${
-                  fieldErrors["contactInfo.name"] &&
-                  touchedFields["contactInfo.name"]
-                    ? "border-red-400 focus:ring-red-200 bg-red-50"
-                    : touchedFields["contactInfo.name"] &&
-                        formData.contactInfo.name
-                      ? "border-green-400 focus:ring-green-200"
-                      : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
-                }`}
+                className={[
+                  "mt-2 w-full rounded-xl border px-4 py-3 text-sm outline-none transition",
+                  errors.contactName
+                    ? "border-rose-300 bg-rose-50"
+                    : "border-gray-200 bg-gray-50 focus:bg-white focus:border-blue-400",
+                ].join(" ")}
+                placeholder="Full name"
+                {...register("contactName", {
+                  required: "Name is required",
+                  minLength: { value: 2, message: "Min 2 characters" },
+                  maxLength: { value: 100, message: "Max 100 characters" },
+                })}
               />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                <FieldStatus
-                  value={formData.contactInfo.name}
-                  error={fieldErrors["contactInfo.name"]}
-                  touched={touchedFields["contactInfo.name"]}
-                />
-              </div>
+              <FieldError message={errors.contactName?.message} />
             </div>
-            {fieldErrors["contactInfo.name"] &&
-              touchedFields["contactInfo.name"] && (
-                <p className="mt-2 text-sm text-red-600 flex items-center gap-1.5">
-                  <FiAlertCircle className="w-4 h-4" />
-                  {fieldErrors["contactInfo.name"]}
-                </p>
-              )}
-          </div>
 
-          <div>
-            <label
-              htmlFor="contactEmail"
-              className="block text-sm font-semibold text-gray-700 mb-2"
-            >
-              Email <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
+            <div>
+              <label className="text-xs font-bold text-gray-600 uppercase">
+                Email *
+              </label>
               <input
-                id="contactEmail"
-                name="contactInfo.email"
-                type="email"
-                value={formData.contactInfo.email}
-                onChange={handleChange}
-                onBlur={handleBlur}
-                placeholder="your.email@example.com"
-                className={`w-full px-4 py-2.5 pr-12 border-2 rounded-lg focus:ring-2 focus:outline-none transition-all ${
-                  fieldErrors["contactInfo.email"] &&
-                  touchedFields["contactInfo.email"]
-                    ? "border-red-400 focus:ring-red-200 bg-red-50"
-                    : touchedFields["contactInfo.email"] &&
-                        formData.contactInfo.email
-                      ? "border-green-400 focus:ring-green-200"
-                      : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
-                }`}
+                className={[
+                  "mt-2 w-full rounded-xl border px-4 py-3 text-sm outline-none transition",
+                  errors.contactEmail
+                    ? "border-rose-300 bg-rose-50"
+                    : "border-gray-200 bg-gray-50 focus:bg-white focus:border-blue-400",
+                ].join(" ")}
+                placeholder="name@example.com"
+                {...register("contactEmail", {
+                  required: "Email is required",
+                  pattern: {
+                    value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+                    message: "Invalid email",
+                  },
+                })}
               />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                <FieldStatus
-                  value={formData.contactInfo.email}
-                  error={fieldErrors["contactInfo.email"]}
-                  touched={touchedFields["contactInfo.email"]}
-                />
-              </div>
+              <FieldError message={errors.contactEmail?.message} />
             </div>
-            {fieldErrors["contactInfo.email"] &&
-              touchedFields["contactInfo.email"] && (
-                <p className="mt-2 text-sm text-red-600 flex items-center gap-1.5">
-                  <FiAlertCircle className="w-4 h-4" />
-                  {fieldErrors["contactInfo.email"]}
-                </p>
-              )}
-          </div>
 
-          <div>
-            <label
-              htmlFor="contactPhone"
-              className="block text-sm font-semibold text-gray-700 mb-2"
-            >
-              Phone (Optional)
-            </label>
-            <input
-              id="contactPhone"
-              name="contactInfo.phone"
-              type="tel"
-              value={formData.contactInfo.phone}
-              onChange={handleChange}
-              onBlur={handleBlur}
-              placeholder="10-digit number"
-              maxLength={10}
-              className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none"
-            />
-            {fieldErrors["contactInfo.phone"] &&
-              touchedFields["contactInfo.phone"] && (
-                <p className="mt-2 text-sm text-red-600 flex items-center gap-1.5">
-                  <FiAlertCircle className="w-4" />
-                  {fieldErrors["contactInfo.phone"]}
-                </p>
-              )}
+            <div className="md:col-span-2">
+              <label className="text-xs font-bold text-gray-600 uppercase">
+                Phone (optional)
+              </label>
+              <input
+                className={[
+                  "mt-2 w-full rounded-xl border px-4 py-3 text-sm outline-none transition",
+                  errors.contactPhone
+                    ? "border-rose-300 bg-rose-50"
+                    : "border-gray-200 bg-gray-50 focus:bg-white focus:border-blue-400",
+                ].join(" ")}
+                placeholder="10-digit number"
+                maxLength={10}
+                {...register("contactPhone", {
+                  validate: (v) => {
+                    const s = String(v || "").trim();
+                    if (!s) return true;
+                    return (
+                      /^[6-9]\d{9}$/.test(s) ||
+                      "Invalid phone (10 digits, starts 6-9)"
+                    );
+                  },
+                })}
+              />
+              <FieldError message={errors.contactPhone?.message} />
+            </div>
           </div>
         </div>
 
@@ -815,36 +637,33 @@ const ComplaintForm = ({
         <button
           type="submit"
           disabled={isSubmitting}
-          className={`w-full py-3 px-6 rounded-lg font-semibold text-white transition-all ${
+          className={[
+            "w-full rounded-2xl px-5 py-3 text-sm font-extrabold text-white shadow-lg transition active:scale-[0.99]",
             isSubmitting
               ? "bg-gray-400 cursor-not-allowed"
-              : "bg-blue-600 hover:bg-blue-700 transform hover:scale-[1.02] active:scale-[0.98]"
-          }`}
+              : "bg-blue-600 hover:bg-blue-700 shadow-blue-600/20",
+          ].join(" ")}
         >
           {isSubmitting ? (
-            <span className="flex items-center justify-center gap-2">
-              <FiLoader className="w-5 h-5 animate-spin" />
-              Submitting...
+            <span className="inline-flex items-center justify-center gap-2">
+              <FiLoader className="h-5 w-5 animate-spin" />
+              Submitting…
             </span>
           ) : (
-            <span className="flex items-center justify-center gap-2">
-              Submit Complaint
-              <FiSend className="w-4 h-4" />
+            <span className="inline-flex items-center justify-center gap-2">
+              Submit complaint
+              <FiSend className="h-4 w-4" />
             </span>
           )}
         </button>
       </form>
 
-      {/* Preview Modal */}
-      {previewFile && (
-        <PreviewModal
-          file={previewFile.file}
-          previewUrl={previewFile.url}
-          onClose={() => setPreviewFile(null)}
-        />
-      )}
+      <PreviewModal
+        open={preview.open}
+        file={preview.file}
+        url={preview.url}
+        onClose={() => setPreview({ open: false, file: null, url: "" })}
+      />
     </>
   );
-};
-
-export default ComplaintForm;
+}

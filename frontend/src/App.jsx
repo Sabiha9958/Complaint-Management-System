@@ -1,75 +1,76 @@
-// src/App.jsx
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Routes, Route, Navigate, Outlet, useLocation } from "react-router-dom";
-import { useAuth } from "./context/AuthContext";
 import { Activity, AlertCircle } from "lucide-react";
+import { useAuth } from "./context/AuthContext";
 
-// === Public Pages ===
+import Navbar from "./components/layout/Navbar";
+import Footer from "./components/layout/Footer";
+
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import NotFound from "./pages/NotFound";
-import ForgotPassword from "./pages/settings/ForgotPassword";
-import ResetPassword from "./pages/settings/ResetPassword";
 
-// === User Pages ===
+import ForgotPasswordPage from "./pages/settings/ForgotPassword";
+import ResetPasswordPage from "./pages/settings/ResetPassword";
+
 import ProfilePage from "./pages/settings/ProfilePage";
 import SettingsPage from "./pages/Settings";
-import Complaints from "./pages/Complaints";
-
-// === Admin Pages ===
+import Complaints from "./pages/Complaint";
 import Admin from "./pages/Admin";
 
-// === Layout Components ===
-import Navbar from "./components/layout/Navbar";
-import Footer from "./components/layout/Footer";
+import FAQ from "./pages/Docs/FAQ";
+import About from "./pages/Docs/About";
+import PrivacyPolicy from "./pages/Docs/PrivacyPolicy";
+import TermsOfService from "./pages/Docs/TermsOfService";
+import CookiePolicy from "./pages/Docs/CookiePolicy";
+import Accessibility from "./pages/Docs/Accessibility";
+import PublicDashboard from "./pages/Docs/PublicDashboard";
 
-/* ================================================================
-   🎨 UTILITY COMPONENTS
-   ================================================================ */
-
+// --------------------
+// UX helpers
+// --------------------
 const ScrollToTop = () => {
   const { pathname } = useLocation();
 
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "instant" });
+    // Common pattern for Router v6 scroll-to-top on navigation. [web:93]
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   }, [pathname]);
 
   return null;
 };
 
 const LoadingSpinner = () => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50">
-    <div className="text-center">
-      <div className="relative mx-auto mb-6 h-20 w-20">
+  <div className="fixed inset-0 z-50 grid place-items-center bg-white/80 backdrop-blur-sm">
+    <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-xl">
+      <div className="relative mx-auto mb-5 h-16 w-16">
         <div className="absolute inset-0 rounded-full border-4 border-indigo-200 animate-pulse" />
         <div className="absolute inset-0 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
         <Activity
           className="absolute inset-0 m-auto text-indigo-600"
-          size={32}
+          size={26}
         />
       </div>
-      <h2 className="mb-2 text-xl font-bold text-gray-900 animate-pulse">
-        Loading...
-      </h2>
-      <p className="text-sm text-gray-600">Please wait a moment</p>
+      <h2 className="text-lg font-extrabold text-slate-900">Loading</h2>
+      <p className="mt-1 text-sm text-slate-600">Preparing your workspace…</p>
     </div>
   </div>
 );
 
-const ErrorBoundary = ({ error }) => (
-  <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-    <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8 text-center">
-      <div className="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
-        <AlertCircle className="w-8 h-8 text-red-600" />
+const AccessDenied = ({ message }) => (
+  <div className="grid min-h-screen place-items-center bg-slate-50 px-4">
+    <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-xl">
+      <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-red-50 ring-1 ring-red-100">
+        <AlertCircle className="h-7 w-7 text-red-600" />
       </div>
-      <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
-      <p className="text-gray-600 mb-6">
-        {error || "You don't have permission to access this page."}
+      <h2 className="text-2xl font-extrabold text-slate-900">Access denied</h2>
+      <p className="mt-2 text-slate-600">
+        {message || "You don't have permission to access this page."}
       </p>
       <a
         href="/"
-        className="inline-block px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
+        className="mt-6 inline-flex items-center justify-center rounded-xl bg-indigo-600 px-6 py-3 text-sm font-extrabold text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/60"
       >
         Go to Home
       </a>
@@ -77,171 +78,135 @@ const ErrorBoundary = ({ error }) => (
   </div>
 );
 
-/* ================================================================
-   📐 LAYOUT COMPONENTS
-   ================================================================ */
-
-const MainLayout = () => (
-  <div className="flex min-h-screen flex-col bg-gray-50">
-    <ScrollToTop />
-    <Navbar />
-    <main className="flex-1">
-      <Outlet />
-    </main>
-    <Footer />
-  </div>
-);
-
-/* ================================================================
-   🎣 CUSTOM HOOKS
-   ================================================================ */
-
-const useDelayedSpinner = (loading, delay = 300) => {
-  const [showSpinner, setShowSpinner] = useState(false);
+const useDelayedSpinner = (loading, delay = 250) => {
+  const [show, setShow] = useState(false);
 
   useEffect(() => {
     if (!loading) {
-      setShowSpinner(false);
+      setShow(false);
       return;
     }
-    const timer = setTimeout(() => setShowSpinner(true), delay);
+    const timer = setTimeout(() => setShow(true), delay);
     return () => clearTimeout(timer);
   }, [loading, delay]);
 
-  return showSpinner;
+  return show;
 };
 
-/* ================================================================
-   🔒 ROUTE GUARDS
-   ================================================================ */
-
-/**
- * ProtectedRoute - Wraps routes that require authentication
- * @param {ReactNode} children - Child components
- * @param {Array} allowedRoles - Array of allowed user roles
- */
-const ProtectedRoute = ({ children, allowedRoles = [] }) => {
+// --------------------
+// Route guards (Outlet-based)
+// --------------------
+const RequireAuth = ({ allowedRoles }) => {
   const { user, loading, isInitialized } = useAuth();
   const location = useLocation();
-  const checkingAuth = loading || !isInitialized;
-  const showSpinner = useDelayedSpinner(checkingAuth);
 
-  // Show loading spinner while checking authentication
-  if (checkingAuth && showSpinner) {
-    return <LoadingSpinner />;
-  }
+  const checking = loading || !isInitialized;
+  const showSpinner = useDelayedSpinner(checking);
 
-  // Redirect to login if not authenticated
+  if (checking && showSpinner) return <LoadingSpinner />;
+
   if (!user && isInitialized) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  // Check role-based access
-  if (user && allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
+  if (user && allowedRoles?.length && !allowedRoles.includes(user.role)) {
     return (
-      <ErrorBoundary error="You don't have permission to access this area." />
+      <AccessDenied message="You don't have permission to access this area." />
     );
   }
 
-  return children;
+  return <Outlet />;
 };
 
-/**
- * PublicRoute - Wraps routes that should only be accessible when NOT logged in
- * @param {ReactNode} children - Child components
- */
-const PublicRoute = ({ children }) => {
+const RequireGuest = () => {
   const { user, loading, isInitialized } = useAuth();
   const location = useLocation();
-  const checkingAuth = loading || !isInitialized;
-  const showSpinner = useDelayedSpinner(checkingAuth);
 
-  if (checkingAuth && showSpinner) {
-    return <LoadingSpinner />;
-  }
+  const checking = loading || !isInitialized;
+  const showSpinner = useDelayedSpinner(checking);
 
-  // Redirect authenticated users away from auth pages
+  if (checking && showSpinner) return <LoadingSpinner />;
+
   if (user && isInitialized) {
     const from = location.state?.from?.pathname || "/";
     return <Navigate to={from} replace />;
   }
 
-  return children;
+  return <Outlet />;
 };
 
-/* ================================================================
-   🚀 MAIN APPLICATION
-   ================================================================ */
+// --------------------
+// Layout
+// --------------------
+const MainLayout = () => (
+  <div className="flex min-h-screen flex-col bg-slate-50">
+    <ScrollToTop />
+
+    {/* Skip link improves keyboard accessibility. [web:55] */}
+    <a
+      href="#main-content"
+      className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-xl focus:bg-indigo-600 focus:px-4 focus:py-2 focus:text-sm focus:font-extrabold focus:text-white"
+    >
+      Skip to content
+    </a>
+
+    <Navbar />
+
+    <main id="main-content" className="flex-1">
+      <Outlet />
+    </main>
+
+    <Footer />
+  </div>
+);
 
 function App() {
+  const docsRoutes = useMemo(
+    () => [
+      { path: "/help", element: <PublicDashboard /> },
+      { path: "/faq", element: <FAQ /> },
+      { path: "/about", element: <About /> },
+      { path: "/privacy-policy", element: <PrivacyPolicy /> },
+      { path: "/terms-of-service", element: <TermsOfService /> },
+      { path: "/cookie-policy", element: <CookiePolicy /> },
+      { path: "/accessibility", element: <Accessibility /> },
+    ],
+    []
+  );
+
   return (
     <Routes>
       <Route element={<MainLayout />}>
-        {/* ==================== PUBLIC ROUTES ==================== */}
+        {/* Public pages */}
         <Route path="/" element={<Home />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password/:token" element={<ResetPassword />} />
 
-        {/* ==================== AUTH ROUTES ==================== */}
-        <Route
-          path="/login"
-          element={
-            <PublicRoute>
-              <Login />
-            </PublicRoute>
-          }
-        />
-        <Route
-          path="/register"
-          element={
-            <PublicRoute>
-              <Register />
-            </PublicRoute>
-          }
-        />
+        {docsRoutes.map((r) => (
+          <Route key={r.path} path={r.path} element={r.element} />
+        ))}
 
-        {/* ==================== USER ROUTES ==================== */}
-        {/* Profile - View only, public info */}
-        <Route
-          path="/profile"
-          element={
-            <ProtectedRoute>
-              <ProfilePage />
-            </ProtectedRoute>
-          }
-        />
+        {/* Separate auth utility pages (public) */}
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
 
-        {/* Settings - Edit user info, private settings */}
-        <Route
-          path="/settings/*"
-          element={
-            <ProtectedRoute>
-              <SettingsPage />
-            </ProtectedRoute>
-          }
-        />
+        {/* Guest-only routes */}
+        <Route element={<RequireGuest />}>
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+        </Route>
 
-        {/* Complaints Management */}
-        <Route
-          path="/complaints/*"
-          element={
-            <ProtectedRoute>
-              <Complaints />
-            </ProtectedRoute>
-          }
-        />
+        {/* Auth-required routes */}
+        <Route element={<RequireAuth />}>
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/complaints/*" element={<Complaints />} />
+        </Route>
 
-        {/* ==================== ADMIN ROUTES ==================== */}
-        <Route
-          path="/admin/*"
-          element={
-            <ProtectedRoute allowedRoles={["admin", "staff"]}>
-              <Admin />
-            </ProtectedRoute>
-          }
-        />
+        {/* Role-protected routes */}
+        <Route element={<RequireAuth allowedRoles={["admin", "staff"]} />}>
+          <Route path="/admin/*" element={<Admin />} />
+        </Route>
 
-        {/* ==================== FALLBACK ==================== */}
+        {/* 404 */}
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

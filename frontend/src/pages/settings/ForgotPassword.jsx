@@ -1,13 +1,7 @@
-/**
- * ================================================================
- * 🔑 FORGOT PASSWORD PAGE
- * ================================================================
- * Request password reset email
- * ================================================================
- */
+// src/pages/settings/ForgotPassword.jsx
 
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { toast } from "react-toastify";
 import {
   FiMail,
@@ -17,250 +11,280 @@ import {
   FiCheckCircle,
   FiLoader,
 } from "react-icons/fi";
-import apiClient from "../../api/apiClient";
+import api from "../../api/apiClient";
 
 const ForgotPassword = () => {
-  const navigate = useNavigate();
-
   const [email, setEmail] = useState("");
+  const [touched, setTouched] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
 
-  // ============================================================
-  // VALIDATION
-  // ============================================================
-
-  const validateEmail = (email) => {
-    if (!email.trim()) {
-      return "Email is required";
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+  const validateEmail = (value) => {
+    const trimmed = value.trim();
+    if (!trimmed) return "Email is required";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
       return "Please enter a valid email address";
     }
-    return null;
+    return "";
   };
 
-  // ============================================================
-  // HANDLERS
-  // ============================================================
-
   const handleChange = (e) => {
-    setEmail(e.target.value);
+    const value = e.target.value;
+    setEmail(value);
+    if (!touched) setTouched(true);
     if (error) setError("");
+  };
+
+  const handleBlur = () => {
+    if (!touched) setTouched(true);
+    const validationError = validateEmail(email);
+    if (validationError) setError(validationError);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    // Validate
     const validationError = validateEmail(email);
     if (validationError) {
       setError(validationError);
+      setTouched(true);
       return;
     }
+
+    if (loading) return;
 
     setLoading(true);
     setError("");
 
     try {
-      const response = await apiClient.post("/auth/forgot-password", {
+      const response = await api.post("/auth/forgot-password", {
         email: email.trim().toLowerCase(),
       });
 
-      if (response.success) {
+      if (response?.success) {
         setEmailSent(true);
-        toast.success("Password reset email sent! Check your inbox.");
+        toast.success("Password reset email sent. Please check your inbox.", {
+          toastId: "forgot-success",
+        });
       } else {
-        throw new Error(response.message || "Failed to send reset email");
+        throw new Error(
+          response?.message || "Unable to send reset email. Please try again."
+        );
       }
     } catch (err) {
-      console.error("Forgot password error:", err);
       const errorMsg =
-        err.response?.data?.message ||
-        err.message ||
-        "Failed to send reset email";
+        err?.message ||
+        err?.response?.data?.message ||
+        "Failed to send reset email. Please try again.";
       setError(errorMsg);
-      toast.error(errorMsg);
+      toast.error(errorMsg, { toastId: "forgot-error" });
     } finally {
       setLoading(false);
     }
   };
 
-  // ============================================================
-  // RENDER SUCCESS STATE
-  // ============================================================
+  const handleResend = () => {
+    setEmailSent(false);
+    setTouched(false);
+    setError("");
+  };
 
+  // ===========================
+  // SUCCESS STATE
+  // ===========================
   if (emailSent) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4">
-        <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 border-2 border-gray-100">
-          {/* Success Icon */}
+      <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 px-4">
+        <section className="w-full max-w-md bg-slate-900/80 backdrop-blur-xl rounded-3xl border border-slate-800 shadow-2xl shadow-blue-900/40 p-8">
           <div className="text-center mb-6">
-            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <FiCheckCircle className="w-10 h-10 text-green-600" />
+            <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-emerald-500/10 border border-emerald-400/40 flex items-center justify-center">
+              <FiCheckCircle className="w-10 h-10 text-emerald-400" />
             </div>
-            <h1 className="text-3xl font-black text-gray-900 mb-2">
-              Email Sent!
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-50 mb-2">
+              Email sent
             </h1>
-            <p className="text-gray-600 leading-relaxed">
-              We've sent a password reset link to{" "}
-              <span className="font-bold text-gray-900">{email}</span>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              A password reset link has been sent to{" "}
+              <span className="font-semibold text-slate-50 break-all">
+                {email}
+              </span>
+              . It may take a minute to arrive.
             </p>
           </div>
 
-          {/* Instructions */}
-          <div className="bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 mb-6">
-            <h3 className="font-black text-blue-900 mb-2">Next Steps:</h3>
-            <ol className="space-y-2 text-sm text-blue-800">
-              <li className="flex items-start gap-2">
-                <span className="font-bold">1.</span>
-                <span>Check your email inbox for the reset link</span>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-6">
+            <h2 className="text-sm font-semibold text-slate-200 mb-2">
+              What happens next
+            </h2>
+            <ol className="space-y-2 text-sm text-slate-300">
+              <li className="flex gap-2">
+                <span className="font-semibold text-slate-400">1.</span>
+                <span>Open the email we just sent to you.</span>
               </li>
-              <li className="flex items-start gap-2">
-                <span className="font-bold">2.</span>
-                <span>Click the link to reset your password</span>
+              <li className="flex gap-2">
+                <span className="font-semibold text-slate-400">2.</span>
+                <span>Click on the secure reset link.</span>
               </li>
-              <li className="flex items-start gap-2">
-                <span className="font-bold">3.</span>
-                <span>Create a new strong password</span>
+              <li className="flex gap-2">
+                <span className="font-semibold text-slate-400">3.</span>
+                <span>Choose a new strong password and confirm.</span>
               </li>
             </ol>
           </div>
 
-          {/* Actions */}
           <div className="space-y-3">
             <button
-              onClick={() => setEmailSent(false)}
-              className="w-full py-3 bg-blue-600 text-white font-black rounded-xl hover:bg-blue-700 transition-all"
+              type="button"
+              onClick={handleResend}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-400 hover:to-indigo-400 text-slate-50 font-semibold py-3 text-sm shadow-lg shadow-blue-900/40 transition-transform active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-950"
             >
-              Resend Email
+              <FiSend className="w-4 h-4" />
+              <span>Send reset link again</span>
             </button>
+
             <Link
               to="/login"
-              className="block text-center py-3 text-blue-600 font-bold hover:underline"
+              className="block text-center text-sm font-semibold text-blue-300 hover:text-blue-200 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 rounded-lg py-2"
             >
-              Back to Login
+              Back to login
             </Link>
           </div>
 
-          {/* Support */}
-          <p className="text-xs text-gray-500 text-center mt-6">
-            Didn't receive the email? Check your spam folder or{" "}
+          <p className="mt-6 text-[11px] text-center text-slate-400">
+            Not seeing the email? Check your spam folder or{" "}
             <Link
               to="/support"
-              className="text-blue-600 font-bold hover:underline"
+              className="font-semibold text-blue-300 hover:text-blue-200 hover:underline"
             >
               contact support
             </Link>
+            .
           </p>
-        </div>
-      </div>
+        </section>
+      </main>
     );
   }
 
-  // ============================================================
-  // RENDER FORM
-  // ============================================================
+  // ===========================
+  // FORM STATE
+  // ===========================
+  const showInlineError = (touched && !!error) || !!error;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4 relative overflow-hidden">
-      {/* Animated Background */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-blue-400 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob" />
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-indigo-400 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000" />
+    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 px-4 relative overflow-hidden">
+      {/* Soft blobs background */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -top-32 -right-24 w-72 h-72 bg-blue-500/40 rounded-full blur-3xl opacity-40 animate-pulse" />
+        <div className="absolute -bottom-40 -left-28 w-80 h-80 bg-indigo-500/30 rounded-full blur-3xl opacity-40 animate-pulse [animation-delay:1500ms]" />
       </div>
 
-      <div className="relative w-full max-w-md bg-white/95 backdrop-blur-sm rounded-3xl shadow-2xl p-8 border-2 border-gray-100">
-        {/* Back Button */}
+      <section className="relative w-full max-w-md bg-slate-900/80 backdrop-blur-xl rounded-3xl border border-slate-800 shadow-2xl shadow-blue-900/40 p-8">
+        {/* Back */}
         <Link
           to="/login"
-          className="inline-flex items-center gap-2 text-gray-600 hover:text-gray-900 font-bold mb-6 group"
+          className="inline-flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100 mb-6 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 rounded-lg px-1 py-1"
         >
-          <FiArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
-          Back to Login
+          <FiArrowLeft className="w-4 h-4" />
+          <span>Back to login</span>
         </Link>
 
         {/* Header */}
-        <div className="text-center mb-8">
-          <div className="w-20 h-20 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-5 shadow-xl">
-            <FiMail className="w-10 h-10 text-white" />
+        <header className="text-center mb-8">
+          <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-500 shadow-xl shadow-blue-900/40">
+            <FiMail className="h-10 w-10 text-white" aria-hidden="true" />
           </div>
-          <h1 className="text-4xl font-black text-gray-900 mb-2">
-            Forgot Password?
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-50 mb-2">
+            Forgot password?
           </h1>
-          <p className="text-gray-600 leading-relaxed">
-            No worries! Enter your email and we'll send you reset instructions.
+          <p className="text-sm text-slate-300 leading-relaxed max-w-sm mx-auto">
+            Enter the email associated with your account. A secure reset link
+            will be sent if the account exists.
           </p>
-        </div>
+        </header>
 
-        {/* Error Alert */}
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 border-2 border-red-200 rounded-2xl">
-            <div className="flex items-start gap-3">
-              <FiAlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-              <p className="text-sm text-red-700 font-semibold">{error}</p>
-            </div>
+        {/* Error banner */}
+        {showInlineError && (
+          <div className="mb-5 flex items-start gap-3 rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3">
+            <FiAlertCircle
+              className="mt-0.5 h-5 w-5 text-red-400"
+              aria-hidden="true"
+            />
+            <p className="text-xs sm:text-sm font-medium text-red-200">
+              {error}
+            </p>
           </div>
         )}
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Email Field */}
+        <form onSubmit={handleSubmit} className="space-y-6" noValidate>
           <div>
-            <label className="block text-sm font-black text-gray-700 mb-2">
-              Email Address
+            <label
+              htmlFor="email"
+              className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-300"
+            >
+              Email address
             </label>
             <div className="relative">
-              <FiMail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
+                <FiMail className="h-4 w-4 text-slate-500" aria-hidden="true" />
+              </span>
               <input
+                id="email"
+                name="email"
                 type="email"
+                autoComplete="email"
                 value={email}
                 onChange={handleChange}
-                placeholder="you@example.com"
+                onBlur={handleBlur}
                 disabled={loading}
-                className={`w-full pl-12 pr-4 py-4 border-2 rounded-xl focus:outline-none focus:ring-4 transition-all text-base ${
-                  error
-                    ? "border-red-400 bg-red-50 focus:ring-red-200"
-                    : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
-                }`}
-                autoFocus
+                placeholder="you@example.com"
+                className={`w-full rounded-xl border bg-slate-900/80 py-3 pl-10 pr-3 text-sm text-slate-50 shadow-inner outline-none transition
+                  placeholder:text-slate-500
+                  focus:ring-2 focus:ring-blue-400 focus:border-blue-400
+                  disabled:cursor-not-allowed disabled:opacity-60
+                  ${
+                    showInlineError
+                      ? "border-red-400 focus:ring-red-400 focus:border-red-400"
+                      : "border-slate-700 hover:border-slate-500"
+                  }`}
               />
             </div>
+            <p className="mt-1 text-[11px] text-slate-400">
+              You will receive a one‑time secure link to reset your password.
+            </p>
           </div>
 
-          {/* Submit Button */}
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-black rounded-xl hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-xl flex items-center justify-center gap-2"
+            className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 py-3 text-sm font-semibold text-slate-50 shadow-lg shadow-blue-900/40 transition-transform hover:from-blue-400 hover:to-indigo-400 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-950"
           >
             {loading ? (
               <>
-                <FiLoader className="w-5 h-5 animate-spin" />
-                Sending...
+                <FiLoader className="h-4 w-4 animate-spin" aria-hidden="true" />
+                <span>Sending reset link...</span>
               </>
             ) : (
               <>
-                <FiSend className="w-5 h-5" />
-                Send Reset Link
+                <FiSend className="h-4 w-4" aria-hidden="true" />
+                <span>Send reset link</span>
               </>
             )}
           </button>
         </form>
 
-        {/* Footer */}
-        <p className="mt-6 text-center text-gray-600">
-          Remember your password?{" "}
+        <footer className="mt-6 text-center text-xs text-slate-400">
+          Remembered your password?{" "}
           <Link
             to="/login"
-            className="font-black text-blue-600 hover:underline"
+            className="font-semibold text-blue-300 hover:text-blue-200 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 rounded-lg px-1"
           >
             Log in
           </Link>
-        </p>
-      </div>
-    </div>
+        </footer>
+      </section>
+    </main>
   );
 };
 

@@ -1,8 +1,5 @@
-/**
- * ================================================================
- * 📝 REGISTRATION PAGE - Email/Google signup + auto-login
- * ================================================================
- */
+// src/pages/Register.jsx
+// Registration with email and Google + auto-login
 
 import React, { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -20,120 +17,103 @@ import {
   FiLoader,
 } from "react-icons/fi";
 import { FcGoogle } from "react-icons/fc";
-
 import { useAuth } from "../context/AuthContext";
 import { TokenManager, UserManager } from "../utils/storage";
 
-// ================================================================
-// HELPERS
-// ================================================================
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
+// get home route by role
 const getHomeRoute = (role = "user") => {
   const routes = {
-    admin: "/admin/dashboard",
-    staff: "/staff/dashboard",
+    admin: "/admin",
+    staff: "/staff",
     user: "/",
   };
-  return routes[role] || "/";
+  return routes[role?.toLowerCase()] || "/";
 };
 
-// ================================================================
-// SUB-COMPONENTS
-// ================================================================
-
-const ErrorAlert = ({ message, onDismiss }) => (
-  <div
-    role="alert"
-    className="mb-6 p-4 bg-red-50 border-2 border-red-200 rounded-2xl shadow-sm"
-  >
-    <div className="flex items-start gap-3">
-      <div className="p-2 bg-red-100 rounded-xl">
-        <FiAlertCircle className="w-5 h-5 text-red-600" />
+// inline error alert
+const ErrorAlert = ({ message, onDismiss }) =>
+  !message ? null : (
+    <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
+      <div className="flex items-start gap-2">
+        <FiAlertCircle className="mt-0.5 h-4 w-4 text-red-600" />
+        <p className="flex-1 text-red-800">{message}</p>
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="text-red-500 hover:text-red-700"
+          >
+            ×
+          </button>
+        )}
       </div>
-      <div className="flex-1">
-        <p className="text-sm font-black text-red-900 mb-1">
-          Registration Failed
-        </p>
-        <p className="text-sm text-red-700 leading-relaxed">{message}</p>
-      </div>
-      {onDismiss && (
-        <button
-          onClick={onDismiss}
-          className="p-1 hover:bg-red-100 rounded-lg transition-colors"
-        >
-          ×
-        </button>
-      )}
     </div>
-  </div>
-);
+  );
 
+// small divider
 const Divider = ({ text }) => (
-  <div className="relative my-8">
-    <div className="absolute inset-0 flex items-center">
-      <div className="w-full border-t-2 border-gray-200" />
-    </div>
-    <div className="relative flex justify-center">
-      <span className="px-4 bg-white text-xs font-black text-gray-500 uppercase tracking-widest">
-        {text}
-      </span>
-    </div>
+  <div className="my-5 flex items-center gap-3">
+    <div className="h-px flex-1 bg-gray-200" />
+    <span className="text-xs font-medium uppercase tracking-wide text-gray-400">
+      {text}
+    </span>
+    <div className="h-px flex-1 bg-gray-200" />
   </div>
 );
 
+// field wrapper
 const FormField = ({ label, error, required, children }) => (
-  <div className="space-y-2">
-    <label className="block text-sm font-black text-gray-700">
-      {label} {required && <span className="text-red-500">*</span>}
+  <div className="space-y-1.5">
+    <label className="block text-sm font-medium text-gray-700">
+      {label}
+      {required && <span className="text-red-500"> *</span>}
     </label>
     {children}
     {error && (
-      <p className="text-sm text-red-600 font-bold flex items-center gap-2">
-        <FiAlertCircle className="w-4 h-4" />
+      <p className="flex items-center gap-1 text-xs text-red-600">
+        <FiAlertCircle className="h-3.5 w-3.5" />
         {error}
       </p>
     )}
   </div>
 );
 
+// simple password strength indicator
 const PasswordStrength = ({ password }) => {
-  const getStrength = (pwd) => {
-    if (!pwd) return { level: 0, label: "", color: "" };
-
-    let strength = 0;
-    if (pwd.length >= 6) strength++;
-    if (pwd.length >= 10) strength++;
-    if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) strength++;
-    if (/\d/.test(pwd)) strength++;
-    if (/[^a-zA-Z\d]/.test(pwd)) strength++;
-
-    if (strength <= 2)
-      return { level: strength, label: "Weak", color: "bg-red-500" };
-    if (strength <= 3)
-      return { level: strength, label: "Medium", color: "bg-yellow-500" };
-    return { level: strength, label: "Strong", color: "bg-green-500" };
-  };
-
-  const strength = getStrength(password);
   if (!password) return null;
 
+  const calc = (pwd) => {
+    let s = 0;
+    if (pwd.length >= 6) s++;
+    if (pwd.length >= 10) s++;
+    if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) s++;
+    if (/\d/.test(pwd)) s++;
+    if (/[^a-zA-Z\d]/.test(pwd)) s++;
+    if (s <= 2) return { level: s, label: "Weak", color: "bg-red-500" };
+    if (s <= 3) return { level: s, label: "Medium", color: "bg-yellow-500" };
+    return { level: s, label: "Strong", color: "bg-green-500" };
+  };
+
+  const strength = calc(password);
+
   return (
-    <div className="mt-2">
-      <div className="flex gap-1 mb-1">
-        {[1, 2, 3, 4, 5].map((level) => (
+    <div className="mt-1">
+      <div className="mb-1 flex gap-1">
+        {[1, 2, 3, 4, 5].map((lv) => (
           <div
-            key={level}
+            key={lv}
             className={`h-1 flex-1 rounded-full ${
-              level <= strength.level ? strength.color : "bg-gray-200"
+              lv <= strength.level ? strength.color : "bg-gray-200"
             }`}
           />
         ))}
       </div>
       <p
-        className={`text-xs font-semibold ${strength.color.replace(
-          "bg-",
-          "text-"
-        )}`}
+        className={`text-xs font-medium ${
+          strength.color.replace("bg-", "text-") || "text-gray-500"
+        }`}
       >
         Password strength: {strength.label}
       </p>
@@ -141,13 +121,14 @@ const PasswordStrength = ({ password }) => {
   );
 };
 
-// ================================================================
-// MAIN COMPONENT
-// ================================================================
-
 const Register = () => {
   const navigate = useNavigate();
-  const { register: registerUser, isAuthenticated, user } = useAuth();
+  const {
+    register: registerUser,
+    isAuthenticated,
+    user,
+    updateUser,
+  } = useAuth();
 
   const [formData, setFormData] = useState({
     name: "",
@@ -166,114 +147,110 @@ const Register = () => {
 
   const isLoading = isSubmitting || isGoogleLoading;
 
-  // Redirect already logged in users to their home
+  // redirect authenticated user
   useEffect(() => {
     if (isAuthenticated && user) {
       navigate(getHomeRoute(user.role), { replace: true });
     }
   }, [isAuthenticated, user, navigate]);
 
-  // ============================================================
-  // VALIDATION
-  // ============================================================
-
+  // field validation
   const validateField = (name, value) => {
     const fieldErrors = {};
+    const val = value?.trim?.() ?? value;
 
-    switch (name) {
-      case "name":
-        if (!value.trim()) {
-          fieldErrors.name = "Full name is required";
-        } else if (value.trim().length < 2) {
-          fieldErrors.name = "Name must be at least 2 characters";
-        }
-        break;
+    if (name === "name") {
+      if (!val) fieldErrors.name = "Full name is required";
+      else if (val.length < 2)
+        fieldErrors.name = "Name must be at least 2 characters";
+    }
 
-      case "email":
-        if (!value.trim()) {
-          fieldErrors.email = "Email is required";
-        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) {
-          fieldErrors.email = "Please enter a valid email address";
-        }
-        break;
+    if (name === "email") {
+      if (!val) fieldErrors.email = "Email is required";
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val))
+        fieldErrors.email = "Please enter a valid email";
+    }
 
-      case "phone":
-        if (!value.trim()) {
-          fieldErrors.phone = "Phone number is required";
-        } else if (!/^[0-9]{10}$/.test(value.trim())) {
-          fieldErrors.phone = "Phone must be exactly 10 digits";
-        }
-        break;
+    if (name === "phone") {
+      if (!val) fieldErrors.phone = "Phone number is required";
+      else if (!/^[0-9]{10}$/.test(val))
+        fieldErrors.phone = "Phone must be exactly 10 digits";
+    }
 
-      case "password":
-        if (!value) {
-          fieldErrors.password = "Password is required";
-        } else if (value.length < 6) {
-          fieldErrors.password = "Password must be at least 6 characters";
-        }
-        break;
+    if (name === "password") {
+      if (!value) fieldErrors.password = "Password is required";
+      else if (value.length < 6)
+        fieldErrors.password = "Password must be at least 6 characters";
+    }
 
-      case "confirmPassword":
-        if (!value) {
-          fieldErrors.confirmPassword = "Please confirm your password";
-        } else if (value !== formData.password) {
-          fieldErrors.confirmPassword = "Passwords do not match";
-        }
-        break;
-
-      default:
-        break;
+    if (name === "confirmPassword") {
+      if (!value) fieldErrors.confirmPassword = "Please confirm your password";
+      else if (value !== formData.password)
+        fieldErrors.confirmPassword = "Passwords do not match";
     }
 
     return fieldErrors;
   };
 
+  // full form validation
   const validateForm = () => {
     const allErrors = {};
-
     Object.keys(formData).forEach((field) => {
       Object.assign(allErrors, validateField(field, formData[field]));
     });
-
     if (!agreedToTerms) {
       allErrors.terms = "You must agree to the terms and conditions";
     }
-
     setErrors(allErrors);
     return Object.keys(allErrors).length === 0;
   };
 
-  // ============================================================
-  // HANDLERS
-  // ============================================================
-
+  // on change
   const handleChange = (e) => {
     const { name, value } = e.target;
 
     setFormData((prev) => ({ ...prev, [name]: value }));
-
     if (errors[name]) {
       setErrors((prev) => {
-        const newErrors = { ...prev };
-        delete newErrors[name];
-        return newErrors;
+        const next = { ...prev };
+        delete next[name];
+        return next;
       });
     }
   };
 
+  // on blur
   const handleBlur = (e) => {
     const { name, value } = e.target;
     const fieldErrors = validateField(name, value);
-
-    if (Object.keys(fieldErrors).length > 0) {
+    if (Object.keys(fieldErrors).length) {
       setErrors((prev) => ({ ...prev, ...fieldErrors }));
     }
   };
 
-  // ============================================================
-  // GOOGLE REGISTRATION (same flow as Google login)
-  // ============================================================
+  // shared success handler
+  const handleAuthSuccess = (userData, accessToken, refreshToken) => {
+    if (!userData || !accessToken) {
+      setServerError("Invalid server response");
+      toast.error("Invalid server response");
+      return;
+    }
 
+    TokenManager.set(accessToken);
+    if (refreshToken) TokenManager.setRefresh(refreshToken);
+    UserManager.set(userData);
+    if (updateUser) updateUser(userData);
+
+    toast.success(`Welcome, ${userData.name || "User"}!`, {
+      autoClose: 1500,
+    });
+
+    setTimeout(() => {
+      window.location.href = getHomeRoute(userData.role);
+    }, 400);
+  };
+
+  // Google sign-up
   const googleRegister = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
       setIsGoogleLoading(true);
@@ -285,71 +262,53 @@ const Register = () => {
           {
             headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
           }
-        );
+        ); // [web:19][web:21]
 
-        const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
-        const response = await axios.post(`${API_URL}/api/auth/google`, {
+        const { data } = await axios.post(`${API_URL}/api/auth/google`, {
           email: googleUser.email,
           name: googleUser.name,
           picture: googleUser.picture,
           googleId: googleUser.sub,
           token: tokenResponse.access_token,
-        });
+        }); // [web:19][web:20]
 
-        if (!response.data?.success) {
-          throw new Error(
-            response.data?.message || "Google registration failed"
-          );
+        if (!data?.success) {
+          throw new Error(data?.message || "Google registration failed");
         }
 
-        const {
-          accessToken = response.data.token,
-          refreshToken,
-          user: userData,
-        } = response.data;
+        const accessToken = data.accessToken || data.token;
+        const refreshToken = data.refreshToken;
+        const userData = data.user || data.data;
 
-        if (accessToken) TokenManager.set(accessToken);
-        if (refreshToken) TokenManager.setRefresh(refreshToken);
-        if (userData) UserManager.set(userData);
-
-        toast.success(`Welcome, ${userData.name}! 🎉`, {
-          toastId: "google-register-success",
-        });
-
-        const home = getHomeRoute(userData.role);
-        window.location.href = home;
+        handleAuthSuccess(userData, accessToken, refreshToken);
       } catch (error) {
-        const errorMsg =
-          error.response?.data?.message ||
-          error.message ||
+        const msg =
+          error?.response?.data?.message ||
+          error?.message ||
           "Google sign-up failed";
-        setServerError(errorMsg);
-        toast.error(errorMsg, { toastId: "google-register-error" });
+        setServerError(msg);
+        toast.error(msg);
       } finally {
         setIsGoogleLoading(false);
       }
     },
-    onError: () => {
-      toast.error("Google sign-up was cancelled", {
-        toastId: "google-register-cancelled",
-      });
+    onError: (error) => {
+      const msg =
+        error?.error_description || "Google sign-up was cancelled or failed";
+      toast.error(msg);
+      setServerError(msg);
       setIsGoogleLoading(false);
     },
     flow: "implicit",
-  });
+  }); // [web:19][web:29]
 
-  // ============================================================
-  // EMAIL REGISTRATION
-  // ============================================================
-
+  // email registration submit
   const handleSubmit = async (e) => {
     e.preventDefault();
     setServerError("");
 
     if (!validateForm()) {
-      toast.error("Please fix all errors before submitting", {
-        toastId: "register-validation-error",
-      });
+      toast.error("Please fix errors before submitting");
       return;
     }
 
@@ -366,82 +325,71 @@ const Register = () => {
 
       const result = await registerUser(payload);
 
-      if (result.success && result.user) {
-        toast.success("Account created successfully! 🎉", {
-          toastId: "register-success",
-        });
-
-        const home = getHomeRoute(result.user.role);
-        navigate(home, { replace: true });
+      if (result?.success && result.user) {
+        handleAuthSuccess(
+          result.user,
+          result.accessToken || result.token,
+          result.refreshToken
+        );
       } else {
-        const errorMessage = result.message || "Registration failed";
-        setServerError(errorMessage);
-        toast.error(errorMessage, { toastId: "register-error" });
+        const msg = result?.message || "Registration failed";
+        setServerError(msg);
+        toast.error(msg);
 
-        if (Array.isArray(result.errors)) {
+        if (Array.isArray(result?.errors)) {
           const backendErrors = {};
           result.errors.forEach((err) => {
             const field = err.path || err.param;
-            if (field) {
-              backendErrors[field] = err.msg || err.message;
-            }
+            if (field) backendErrors[field] = err.msg || err.message;
           });
           setErrors((prev) => ({ ...prev, ...backendErrors }));
         }
       }
     } catch (error) {
-      const errorMsg = "An unexpected error occurred";
-      setServerError(errorMsg);
-      toast.error(errorMsg, { toastId: "register-unexpected-error" });
+      const msg =
+        error?.response?.data?.message ||
+        error?.message ||
+        "An unexpected error occurred";
+      setServerError(msg);
+      toast.error(msg);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // ============================================================
-  // RENDER
-  // ============================================================
-
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4 relative overflow-hidden">
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-blue-400 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob" />
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-indigo-400 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-purple-400 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-4000" />
-      </div>
-
-      <div className="relative w-full max-w-md bg-white/95 backdrop-blur-sm rounded-3xl shadow-2xl p-8 border-2 border-gray-100">
-        <div className="text-center mb-8">
-          <div className="w-20 h-20 bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-5 shadow-2xl">
-            <FiUser className="w-10 h-10 text-white" />
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 px-4 py-8">
+      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg ring-1 ring-gray-900/5">
+        {/* heading */}
+        <div className="mb-6 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-600">
+            <FiUser className="h-6 w-6 text-white" />
           </div>
-          <h1 className="text-4xl font-black text-gray-900 mb-2 bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-            Create Account
-          </h1>
-          <p className="text-gray-600 font-medium">Join ComplaintMS today</p>
+          <h1 className="text-2xl font-bold text-gray-900">Create account</h1>
+          <p className="mt-1 text-sm text-gray-600">Join ComplaintMS today</p>
         </div>
 
-        {serverError && (
-          <ErrorAlert
-            message={serverError}
-            onDismiss={() => setServerError("")}
-          />
-        )}
+        {/* server error */}
+        <ErrorAlert
+          message={serverError}
+          onDismiss={() => setServerError("")}
+        />
 
+        {/* Google button */}
         <button
           type="button"
           onClick={() => googleRegister()}
           disabled={isLoading}
-          className="w-full flex items-center justify-center gap-3 px-6 py-4 border-2 border-gray-300 rounded-2xl font-black text-gray-700 bg-white hover:bg-gray-50 hover:border-gray-400 disabled:opacity-50 transition-all mb-6"
+          className="mb-4 flex w-full items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition-all hover:bg-gray-50 hover:shadow disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isGoogleLoading ? (
             <>
-              <FiLoader className="w-6 h-6 animate-spin text-blue-600" />
-              <span>Signing up...</span>
+              <FiLoader className="h-5 w-5 animate-spin text-gray-600" />
+              <span>Signing up with Google...</span>
             </>
           ) : (
             <>
-              <FcGoogle className="w-6 h-6" />
+              <FcGoogle className="h-5 w-5" />
               <span>Sign up with Google</span>
             </>
           )}
@@ -449,10 +397,12 @@ const Register = () => {
 
         <Divider text="Or sign up with email" />
 
-        <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-          <FormField label="Full Name" error={errors.name} required>
+        {/* form */}
+        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+          {/* name */}
+          <FormField label="Full name" error={errors.name} required>
             <div className="relative">
-              <FiUser className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <FiUser className="pointer-events-none absolute inset-y-0 left-3 my-auto h-5 w-5 text-gray-400" />
               <input
                 type="text"
                 name="name"
@@ -461,18 +411,19 @@ const Register = () => {
                 onBlur={handleBlur}
                 placeholder="John Doe"
                 disabled={isLoading}
-                className={`w-full pl-12 pr-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-4 transition-all ${
+                className={`w-full rounded-lg border py-2.5 pl-10 pr-3 text-sm focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:bg-gray-50 ${
                   errors.name
-                    ? "border-red-400 bg-red-50 focus:ring-red-200"
-                    : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
+                    ? "border-red-300 bg-red-50 focus:border-red-500 focus:ring-red-500"
+                    : "border-gray-300 bg-white focus:border-blue-500 focus:ring-blue-500"
                 }`}
               />
             </div>
           </FormField>
 
-          <FormField label="Email Address" error={errors.email} required>
+          {/* email */}
+          <FormField label="Email address" error={errors.email} required>
             <div className="relative">
-              <FiMail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <FiMail className="pointer-events-none absolute inset-y-0 left-3 my-auto h-5 w-5 text-gray-400" />
               <input
                 type="email"
                 name="email"
@@ -481,18 +432,19 @@ const Register = () => {
                 onBlur={handleBlur}
                 placeholder="you@example.com"
                 disabled={isLoading}
-                className={`w-full pl-12 pr-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-4 transition-all ${
+                className={`w-full rounded-lg border py-2.5 pl-10 pr-3 text-sm focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:bg-gray-50 ${
                   errors.email
-                    ? "border-red-400 bg-red-50 focus:ring-red-200"
-                    : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
+                    ? "border-red-300 bg-red-50 focus:border-red-500 focus:ring-red-500"
+                    : "border-gray-300 bg-white focus:border-blue-500 focus:ring-blue-500"
                 }`}
               />
             </div>
           </FormField>
 
-          <FormField label="Phone Number" error={errors.phone} required>
+          {/* phone */}
+          <FormField label="Phone number" error={errors.phone} required>
             <div className="relative">
-              <FiPhone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <FiPhone className="pointer-events-none absolute inset-y-0 left-3 my-auto h-5 w-5 text-gray-400" />
               <input
                 type="tel"
                 name="phone"
@@ -509,18 +461,19 @@ const Register = () => {
                 placeholder="9876543210"
                 maxLength={10}
                 disabled={isLoading}
-                className={`w-full pl-12 pr-4 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-4 transition-all ${
+                className={`w-full rounded-lg border py-2.5 pl-10 pr-3 text-sm focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:bg-gray-50 ${
                   errors.phone
-                    ? "border-red-400 bg-red-50 focus:ring-red-200"
-                    : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
+                    ? "border-red-300 bg-red-50 focus:border-red-500 focus:ring-red-500"
+                    : "border-gray-300 bg-white focus:border-blue-500 focus:ring-blue-500"
                 }`}
               />
             </div>
           </FormField>
 
+          {/* password */}
           <FormField label="Password" error={errors.password} required>
             <div className="relative">
-              <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <FiLock className="pointer-events-none absolute inset-y-0 left-3 my-auto h-5 w-5 text-gray-400" />
               <input
                 type={showPassword ? "text" : "password"}
                 name="password"
@@ -529,34 +482,36 @@ const Register = () => {
                 onBlur={handleBlur}
                 placeholder="••••••••"
                 disabled={isLoading}
-                className={`w-full pl-12 pr-14 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-4 transition-all ${
+                className={`w-full rounded-lg border py-2.5 pl-10 pr-10 text-sm focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:bg-gray-50 ${
                   errors.password
-                    ? "border-red-400 bg-red-50 focus:ring-red-200"
-                    : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
+                    ? "border-red-300 bg-red-50 focus:border-red-500 focus:ring-red-500"
+                    : "border-gray-300 bg-white focus:border-blue-500 focus:ring-blue-500"
                 }`}
               />
               <button
                 type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700"
+                onClick={() => setShowPassword((v) => !v)}
+                disabled={isLoading}
+                className="absolute inset-y-0 right-3 my-auto text-gray-400 hover:text-gray-600 disabled:opacity-50"
               >
                 {showPassword ? (
-                  <FiEyeOff className="w-5 h-5" />
+                  <FiEyeOff className="h-5 w-5" />
                 ) : (
-                  <FiEye className="w-5 h-5" />
+                  <FiEye className="h-5 w-5" />
                 )}
               </button>
             </div>
             <PasswordStrength password={formData.password} />
           </FormField>
 
+          {/* confirm password */}
           <FormField
-            label="Confirm Password"
+            label="Confirm password"
             error={errors.confirmPassword}
             required
           >
             <div className="relative">
-              <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <FiLock className="pointer-events-none absolute inset-y-0 left-3 my-auto h-5 w-5 text-gray-400" />
               <input
                 type={showConfirmPassword ? "text" : "password"}
                 name="confirmPassword"
@@ -565,90 +520,96 @@ const Register = () => {
                 onBlur={handleBlur}
                 placeholder="••••••••"
                 disabled={isLoading}
-                className={`w-full pl-12 pr-14 py-3.5 border-2 rounded-xl focus:outline-none focus:ring-4 transition-all ${
+                className={`w-full rounded-lg border py-2.5 pl-10 pr-10 text-sm focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:bg-gray-50 ${
                   errors.confirmPassword
-                    ? "border-red-400 bg-red-50 focus:ring-red-200"
-                    : "border-gray-300 focus:ring-blue-200 focus:border-blue-500"
+                    ? "border-red-300 bg-red-50 focus:border-red-500 focus:ring-red-500"
+                    : "border-gray-300 bg-white focus:border-blue-500 focus:ring-blue-500"
                 }`}
               />
               <button
                 type="button"
-                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700"
+                onClick={() => setShowConfirmPassword((v) => !v)}
+                disabled={isLoading}
+                className="absolute inset-y-0 right-3 my-auto text-gray-400 hover:text-gray-600 disabled:opacity-50"
               >
                 {showConfirmPassword ? (
-                  <FiEyeOff className="w-5 h-5" />
+                  <FiEyeOff className="h-5 w-5" />
                 ) : (
-                  <FiEye className="w-5 h-5" />
+                  <FiEye className="h-5 w-5" />
                 )}
               </button>
             </div>
           </FormField>
 
-          <div className="flex items-start gap-3">
-            <input
-              id="terms"
-              type="checkbox"
-              checked={agreedToTerms}
-              onChange={(e) => {
-                setAgreedToTerms(e.target.checked);
-                if (errors.terms) {
-                  setErrors((prev) => {
-                    const newErrors = { ...prev };
-                    delete newErrors.terms;
-                    return newErrors;
-                  });
-                }
-              }}
-              className="mt-1 h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
-            <label htmlFor="terms" className="text-sm text-gray-700">
-              I agree to the{" "}
-              <Link
-                to="/terms"
-                className="text-blue-600 font-bold hover:underline"
-              >
-                Terms of Service
-              </Link>{" "}
-              and{" "}
-              <Link
-                to="/privacy"
-                className="text-blue-600 font-bold hover:underline"
-              >
-                Privacy Policy
-              </Link>
-            </label>
+          {/* terms */}
+          <div className="space-y-1">
+            <div className="flex items-start gap-2">
+              <input
+                id="terms"
+                type="checkbox"
+                checked={agreedToTerms}
+                onChange={(e) => {
+                  setAgreedToTerms(e.target.checked);
+                  if (errors.terms) {
+                    setErrors((prev) => {
+                      const next = { ...prev };
+                      delete next.terms;
+                      return next;
+                    });
+                  }
+                }}
+                className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <label htmlFor="terms" className="text-xs text-gray-700">
+                I agree to the{" "}
+                <Link
+                  to="/terms"
+                  className="font-medium text-blue-600 hover:underline"
+                >
+                  Terms of Service
+                </Link>{" "}
+                and{" "}
+                <Link
+                  to="/privacy"
+                  className="font-medium text-blue-600 hover:underline"
+                >
+                  Privacy Policy
+                </Link>
+              </label>
+            </div>
+            {errors.terms && (
+              <p className="flex items-center gap-1 text-xs text-red-600">
+                <FiAlertCircle className="h-3.5 w-3.5" />
+                {errors.terms}
+              </p>
+            )}
           </div>
-          {errors.terms && (
-            <p className="text-sm text-red-600 font-bold flex items-center gap-2">
-              <FiAlertCircle className="w-4 h-4" />
-              {errors.terms}
-            </p>
-          )}
 
+          {/* submit */}
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full py-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-black rounded-2xl hover:from-blue-700 hover:via-indigo-700 hover:to-purple-700 disabled:opacity-50 transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-xl"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md transition-all hover:from-blue-700 hover:to-purple-700 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isLoading ? (
-              <span className="flex items-center justify-center gap-3">
-                <FiLoader className="w-5 h-5 animate-spin" />
-                Creating account...
-              </span>
+              <>
+                <FiLoader className="h-4 w-4 animate-spin" />
+                <span>Creating account...</span>
+              </>
             ) : (
-              "Create Account"
+              <span>Create account</span>
             )}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-gray-700">
+        {/* footer */}
+        <p className="mt-5 text-center text-xs text-gray-600">
           Already have an account?{" "}
           <Link
             to="/login"
-            className="font-black text-blue-600 hover:underline"
+            className="font-medium text-blue-600 hover:text-blue-700"
           >
-            Log in here
+            Log in
           </Link>
         </p>
       </div>

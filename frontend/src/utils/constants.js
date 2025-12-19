@@ -1,13 +1,6 @@
-/**
- * ================================================================
- * 🎯 APPLICATION CONSTANTS - Central configuration
- * ================================================================
- */
+// src/utils/constants.js
 
-// ============================================================================
-// COMPLAINT STATUS
-// ============================================================================
-
+// complaint status
 export const COMPLAINT_STATUS = Object.freeze({
   PENDING: "pending",
   IN_PROGRESS: "in_progress",
@@ -61,10 +54,7 @@ export const STATUS_OPTIONS = Object.freeze(
   Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
 );
 
-// ============================================================================
-// COMPLAINT PRIORITY
-// ============================================================================
-
+// complaint priority
 export const COMPLAINT_PRIORITY = Object.freeze({
   LOW: "low",
   MEDIUM: "medium",
@@ -113,17 +103,14 @@ export const PRIORITY_OPTIONS = Object.freeze(
   Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))
 );
 
-// ============================================================================
-// COMPLAINT CATEGORIES
-// ============================================================================
-
+// complaint categories
 export const COMPLAINT_CATEGORY = Object.freeze({
   TECHNICAL: "technical",
   BILLING: "billing",
   SERVICE: "service",
   PRODUCT: "product",
   HARASSMENT: "harassment",
-  SAFETY: "safety",
+  SAFETY: "Safety",
   OTHER: "other",
 });
 
@@ -151,10 +138,7 @@ export const CATEGORY_OPTIONS = Object.freeze(
   Object.entries(CATEGORY_LABELS).map(([value, label]) => ({ value, label }))
 );
 
-// ============================================================================
-// USER ROLES
-// ============================================================================
-
+// roles
 export const USER_ROLE = Object.freeze({
   ADMIN: "admin",
   STAFF: "staff",
@@ -207,11 +191,7 @@ export const DASHBOARD_ROUTES = Object.freeze({
   user: "/dashboard",
 });
 
-// ============================================================================
-// FILE UPLOAD CONFIGURATION
-// ============================================================================
-
-// File type categories
+// file upload config
 export const FILE_TYPES = Object.freeze({
   IMAGE: "image",
   DOCUMENT: "document",
@@ -220,7 +200,6 @@ export const FILE_TYPES = Object.freeze({
   ATTACHMENT: "attachment",
 });
 
-// Base image config
 export const IMAGE_CONFIG = Object.freeze({
   ALLOWED_TYPES: [
     "image/jpeg",
@@ -234,7 +213,6 @@ export const IMAGE_CONFIG = Object.freeze({
   MAX_SIZE_BYTES: 5 * 1024 * 1024,
 });
 
-// Higher-level image upload presets (avatar + cover)
 export const IMAGE_UPLOAD = Object.freeze({
   AVATAR: {
     MAX_SIZE_MB: 5,
@@ -252,7 +230,6 @@ export const IMAGE_UPLOAD = Object.freeze({
   },
 });
 
-// Document config
 export const DOCUMENT_CONFIG = Object.freeze({
   ALLOWED_TYPES: [
     "application/pdf",
@@ -267,7 +244,6 @@ export const DOCUMENT_CONFIG = Object.freeze({
   MAX_SIZE_BYTES: 10 * 1024 * 1024,
 });
 
-// Avatar upload configuration
 export const AVATAR_CONFIG = Object.freeze({
   ALLOWED_TYPES: ["image/jpeg", "image/jpg", "image/png", "image/webp"],
   ALLOWED_EXTENSIONS: [".jpg", ".jpeg", ".png", ".webp"],
@@ -278,7 +254,6 @@ export const AVATAR_CONFIG = Object.freeze({
   MAX_DIMENSIONS: { width: 2000, height: 2000 },
 });
 
-// Cover image configuration
 export const COVER_CONFIG = Object.freeze({
   ALLOWED_TYPES: ["image/jpeg", "image/jpg", "image/png", "image/webp"],
   ALLOWED_EXTENSIONS: [".jpg", ".jpeg", ".png", ".webp"],
@@ -289,7 +264,6 @@ export const COVER_CONFIG = Object.freeze({
   MAX_DIMENSIONS: { width: 3840, height: 1080 },
 });
 
-// Complaint attachment configuration
 export const ATTACHMENT_CONFIG = Object.freeze({
   ALLOWED_TYPES: [
     ...IMAGE_CONFIG.ALLOWED_TYPES,
@@ -306,19 +280,14 @@ export const ATTACHMENT_CONFIG = Object.freeze({
   TOTAL_MAX_SIZE_BYTES: 50 * 1024 * 1024,
 });
 
-// Backwards-compatible alias for general file uploads (complaint form, etc.)
-export const FILE_UPLOAD = Object.freeze({
-  ...ATTACHMENT_CONFIG,
-});
+export const FILE_UPLOAD = Object.freeze({ ...ATTACHMENT_CONFIG });
 
-// Grouped upload config for easier imports
 export const UPLOAD_CONFIG = Object.freeze({
   AVATAR: AVATAR_CONFIG,
   COVER: COVER_CONFIG,
   ATTACHMENT: ATTACHMENT_CONFIG,
 });
 
-// File type labels for UI
 export const FILE_TYPE_LABELS = Object.freeze({
   "image/jpeg": "JPEG Image",
   "image/jpg": "JPG Image",
@@ -335,7 +304,6 @@ export const FILE_TYPE_LABELS = Object.freeze({
   "text/plain": "Text File",
 });
 
-// File type icons
 export const FILE_TYPE_ICONS = Object.freeze({
   "image/jpeg": "image",
   "image/jpg": "image",
@@ -352,10 +320,7 @@ export const FILE_TYPE_ICONS = Object.freeze({
   "text/plain": "file",
 });
 
-// ============================================================================
-// PAGINATION
-// ============================================================================
-
+// pagination
 export const PAGINATION = Object.freeze({
   DEFAULT_PAGE: 1,
   DEFAULT_LIMIT: 20,
@@ -363,10 +328,7 @@ export const PAGINATION = Object.freeze({
   PAGE_SIZE_OPTIONS: [10, 20, 50, 100],
 });
 
-// ============================================================================
-// DATE FORMATS
-// ============================================================================
-
+// dates
 export const DATE_FORMATS = Object.freeze({
   DISPLAY: "MMM DD, YYYY",
   DISPLAY_WITH_TIME: "MMM DD, YYYY hh:mm A",
@@ -375,10 +337,7 @@ export const DATE_FORMATS = Object.freeze({
   LONG: "MMMM DD, YYYY",
 });
 
-// ============================================================================
-// THEME
-// ============================================================================
-
+// theme
 export const THEME = Object.freeze({
   LIGHT: "light",
   DARK: "dark",
@@ -394,10 +353,7 @@ export const THEME_COLORS = Object.freeze({
   INFO: "#3B82F6",
 });
 
-// ============================================================================
-// API CONFIGURATION
-// ============================================================================
-
+// api config
 export const API_TIMEOUTS = Object.freeze({
   DEFAULT: 30000,
   UPLOAD: 120000,
@@ -410,10 +366,7 @@ export const API_RETRY = Object.freeze({
   RETRY_STATUS_CODES: [408, 429, 500, 502, 503, 504],
 });
 
-// ============================================================================
-// NOTIFICATION
-// ============================================================================
-
+// notifications
 export const NOTIFICATION_TYPE = Object.freeze({
   INFO: "info",
   SUCCESS: "success",
@@ -430,31 +383,22 @@ export const TOAST_CONFIG = Object.freeze({
   DRAGGABLE: true,
 });
 
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
+// helpers
+export const getStatusStyle = (status) =>
+  STATUS_STYLES[status] || STATUS_STYLES.pending;
 
-export const getStatusStyle = (status) => {
-  return STATUS_STYLES[status] || STATUS_STYLES.pending;
-};
+export const getPriorityStyle = (priority) =>
+  PRIORITY_STYLES[priority] || PRIORITY_STYLES.low;
 
-export const getPriorityStyle = (priority) => {
-  return PRIORITY_STYLES[priority] || PRIORITY_STYLES.low;
-};
+export const hasPermission = (role, permission) =>
+  ROLE_PERMISSIONS[role]?.[permission] || false;
 
-export const hasPermission = (role, permission) => {
-  return ROLE_PERMISSIONS[role]?.[permission] || false;
-};
+export const getDashboardRoute = (role) =>
+  DASHBOARD_ROUTES[role] || DASHBOARD_ROUTES.user;
 
-export const getDashboardRoute = (role) => {
-  return DASHBOARD_ROUTES[role] || DASHBOARD_ROUTES.user;
-};
-
-// Single file validation
+// single file validation
 export const validateFile = (file, config) => {
-  if (!file) {
-    return { valid: false, error: "No file selected" };
-  }
+  if (!file) return { valid: false, error: "No file selected" };
 
   if (file.size > config.MAX_SIZE_BYTES) {
     return {
@@ -475,7 +419,7 @@ export const validateFile = (file, config) => {
   return { valid: true };
 };
 
-// Multiple files validation
+// multiple files validation
 export const validateFiles = (files, config) => {
   if (!files || files.length === 0) {
     return { valid: false, error: "No files selected" };
@@ -513,43 +457,33 @@ export const validateFiles = (files, config) => {
   return { valid: true };
 };
 
-// Convenience aliases for consistency in components
 export const validateFileUpload = (file, config) => validateFile(file, config);
 
 export const validateFilesUpload = (files, config) =>
   validateFiles(files, config);
 
-// Format file size
 export const formatFileSize = (bytes) => {
-  if (bytes === 0) return "0 Bytes";
+  if (!bytes) return "0 Bytes";
   const k = 1024;
   const sizes = ["Bytes", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
+  return `${Math.round((bytes / Math.pow(k, i)) * 100) / 100} ${sizes[i]}`;
 };
 
-// Get file icon
-export const getFileIcon = (mimeType) => {
-  return FILE_TYPE_ICONS[mimeType] || "file";
-};
+export const getFileIcon = (mimeType) => FILE_TYPE_ICONS[mimeType] || "file";
 
-// Get file type label
-export const getFileTypeLabel = (mimeType) => {
-  return FILE_TYPE_LABELS[mimeType] || "Unknown File";
-};
+export const getFileTypeLabel = (mimeType) =>
+  FILE_TYPE_LABELS[mimeType] || "Unknown File";
 
-// Check if file is image
 export const isImageFile = (file) => file.type.startsWith("image/");
 
-// Check if file is document
 export const isDocumentFile = (file) =>
   DOCUMENT_CONFIG.ALLOWED_TYPES.includes(file.type);
 
-// Get file extension
 export const getFileExtension = (filename) =>
   filename.slice(((filename.lastIndexOf(".") - 1) >>> 0) + 2);
 
-// Validate image dimensions
+// async image dimension validation (used for avatar/cover)
 export const validateImageDimensions = (file, config) =>
   new Promise((resolve) => {
     const img = new Image();
@@ -587,10 +521,7 @@ export const validateImageDimensions = (file, config) =>
     img.src = url;
   });
 
-// ============================================================================
-// DEFAULT EXPORT (for optional bulk imports)
-// ============================================================================
-
+// default export for bulk imports
 export default {
   COMPLAINT_STATUS,
   STATUS_LABELS,

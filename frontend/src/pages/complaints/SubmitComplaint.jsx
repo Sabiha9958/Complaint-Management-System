@@ -1,5 +1,16 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Toaster, toast } from "react-hot-toast";
+import { AnimatePresence, motion } from "framer-motion";
+import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
+import ComplaintForm from "../../components/Complaint/ComplaintForm";
+
 import {
   CheckCircle,
   Info,
@@ -11,431 +22,481 @@ import {
   FileText,
   Paperclip,
   Lock,
+  Download,
+  Tag,
+  Flag,
+  CheckCircle2,
 } from "lucide-react";
-import { AnimatePresence, motion } from "framer-motion";
-import { useNavigate } from "react-router-dom";
-import ComplaintForm from "../../components/Complaint/ComplaintForm";
-import { useAuth } from "../../context/AuthContext";
 
-// ================================================================
-// 🎨 ANIMATION VARIANTS
-// ================================================================
+/* Backend-aligned options (must match enum exactly) */
+export const CATEGORY_OPTIONS = [
+  "technical",
+  "billing",
+  "service",
+  "product",
+  "harassment",
+  "safety",
+  "other",
+];
+
+export const PRIORITY_OPTIONS = ["low", "medium", "high", "urgent"];
+
+/* ================================================================
+   CONFIG
+================================================================ */
+const WS_URL =
+  import.meta.env.VITE_WS_URL || "ws://localhost:5000/ws/complaints";
+const AUTO_REDIRECT_MS = 1200;
+
+/* ================================================================
+   MOTION VARIANTS
+================================================================ */
 const modalVariants = {
-  hidden: { opacity: 0, scale: 0.95, y: 20 },
+  hidden: { opacity: 0, scale: 0.97, y: 14 },
   visible: {
     opacity: 1,
     scale: 1,
     y: 0,
-    transition: { type: "spring", stiffness: 300, damping: 30 },
+    transition: { type: "spring", stiffness: 320, damping: 28 },
   },
-  exit: {
-    opacity: 0,
-    scale: 0.95,
-    y: 20,
-    transition: { duration: 0.2 },
-  },
+  exit: { opacity: 0, scale: 0.97, y: 14, transition: { duration: 0.18 } },
 };
 
 const overlayVariants = {
   hidden: { opacity: 0 },
-  visible: { opacity: 1 },
-  exit: { opacity: 0 },
+  visible: { opacity: 1, transition: { duration: 0.15 } },
+  exit: { opacity: 0, transition: { duration: 0.15 } },
 };
 
-// ================================================================
-// 🔍 PREVIEW MODAL COMPONENT
-// ================================================================
-const ComplaintPreviewModal = ({ complaint, onClose }) => {
-  if (!complaint) return null;
+/* ================================================================
+   HELPERS
+================================================================ */
+const labelize = (str) =>
+  String(str || "")
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 
-  // Prevent body scroll when modal is open
+const formatDateTime = (date) =>
+  new Date(date).toLocaleString("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+
+const safeText = (v, fallback = "N/A") => (v ? String(v) : fallback);
+
+const isImageLike = (file) => {
+  const mime = String(
+    file?.mimeType || file?.mimetype || file?.type || ""
+  ).toLowerCase();
+  return mime.startsWith("image/");
+};
+
+const getFileName = (file, idx) =>
+  file?.name || file?.originalName || file?.filename || `Attachment ${idx + 1}`;
+
+const getFileUrl = (file) => file?.url || file?.secure_url || file?.path || "";
+
+/* Lock body scroll when modal is open */
+function useLockBodyScroll(locked) {
   useEffect(() => {
+    if (!locked) return;
+    const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = "unset";
+      document.body.style.overflow = prev;
     };
-  }, []);
+  }, [locked]);
+}
 
-  const formatDate = (date) =>
-    new Date(date).toLocaleString("en-IN", {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
+/* ================================================================
+   PREVIEW MODAL (backend aligned)
+================================================================ */
+function ComplaintPreviewModal({ open, complaint, onClose }) {
+  useLockBodyScroll(open);
 
-  const getPriorityColor = (priority) => {
-    const colors = {
-      urgent: "bg-red-100 text-red-700 border-red-200",
-      high: "bg-orange-100 text-orange-700 border-orange-200",
-      medium: "bg-blue-100 text-blue-700 border-blue-200",
-      low: "bg-gray-100 text-gray-700 border-gray-200",
+  // ESC to close
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") onClose();
     };
-    return colors[priority] || colors.medium;
-  };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
 
-  const getCategoryColor = (category) => {
-    const colors = {
-      IT: "bg-purple-100 text-purple-700",
-      Facility: "bg-green-100 text-green-700",
-      Food: "bg-yellow-100 text-yellow-700",
-      Maintenance: "bg-blue-100 text-blue-700",
+  // Create object URLs for File attachments; keep index stable
+  const objectUrlsRef = useRef([]);
+  useEffect(() => {
+    if (!open) return;
+
+    const list = Array.isArray(complaint?.attachments)
+      ? complaint.attachments
+      : [];
+    objectUrlsRef.current = list.map((f) =>
+      f instanceof File ? URL.createObjectURL(f) : null
+    );
+
+    return () => {
+      objectUrlsRef.current.forEach((u) => u && URL.revokeObjectURL(u));
+      objectUrlsRef.current = [];
     };
-    return colors[category] || "bg-gray-100 text-gray-700";
-  };
+  }, [open, complaint]);
+
+  if (!open || !complaint) return null;
+
+  const priorityClass =
+    {
+      urgent: "bg-rose-50 text-rose-700 border-rose-200",
+      high: "bg-orange-50 text-orange-700 border-orange-200",
+      medium: "bg-blue-50 text-blue-700 border-blue-200",
+      low: "bg-slate-50 text-slate-700 border-slate-200",
+    }[String(complaint.priority || "medium")] ||
+    "bg-blue-50 text-blue-700 border-blue-200";
+
+  // Backend enum: technical/billing/service/product/harassment/safety/other
+  const categoryClass =
+    {
+      technical: "bg-purple-50 text-purple-700 border-purple-200",
+      billing: "bg-amber-50 text-amber-800 border-amber-200",
+      service: "bg-blue-50 text-blue-700 border-blue-200",
+      product: "bg-indigo-50 text-indigo-700 border-indigo-200",
+      harassment: "bg-rose-50 text-rose-700 border-rose-200",
+      safety: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      other: "bg-slate-50 text-slate-700 border-slate-200",
+    }[String(complaint.category || "other").toLowerCase()] ||
+    "bg-slate-50 text-slate-700 border-slate-200";
 
   return (
-    <>
-      {/* Backdrop */}
-      <AnimatePresence>
-        <motion.div
-          variants={overlayVariants}
-          initial="hidden"
-          animate="visible"
-          exit="exit"
-          onClick={onClose}
-          className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm"
-        />
-      </AnimatePresence>
-
-      {/* Modal */}
+    <AnimatePresence>
       <motion.div
-        variants={modalVariants}
+        className="fixed inset-0 z-[100] grid place-items-center p-4 sm:p-8"
         initial="hidden"
         animate="visible"
         exit="exit"
-        className="fixed inset-4 sm:inset-8 z-[101] flex items-center justify-center"
-        onClick={onClose}
       >
-        <div
+        {/* Overlay */}
+        <motion.button
+          type="button"
+          aria-label="Close preview"
+          variants={overlayVariants}
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+          onClick={onClose}
+        />
+
+        {/* Dialog */}
+        <motion.div
+          variants={modalVariants}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Complaint preview"
+          className="relative z-[101] w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-2xl flex flex-col"
           onClick={(e) => e.stopPropagation()}
-          className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
         >
           {/* Header */}
-          <div className="flex items-center justify-between border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-6 py-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
-                <Eye className="w-5 h-5 text-white" />
+          <div className="flex items-center justify-between gap-3 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-6 py-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="h-10 w-10 bg-blue-600 rounded-2xl flex items-center justify-center shrink-0">
+                <Eye className="h-5 w-5 text-white" />
               </div>
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">
-                  Complaint Preview
+              <div className="min-w-0">
+                <h2 className="text-lg sm:text-xl font-extrabold text-gray-900 truncate">
+                  Complaint preview
                 </h2>
-                <p className="text-xs text-gray-500">
-                  Review your submission details
+                <p className="text-xs text-gray-600 truncate">
+                  Review backend-saved fields
                 </p>
               </div>
             </div>
+
             <button
+              type="button"
               onClick={onClose}
-              className="rounded-lg p-2 text-gray-400 hover:bg-white hover:text-gray-600 transition-colors"
+              className="rounded-xl p-2 text-gray-500 hover:bg-white hover:text-gray-800 transition"
+              aria-label="Close"
             >
-              <X className="w-5 h-5" />
+              <X className="h-5 w-5" />
             </button>
           </div>
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            {/* Title & ID */}
+            {/* Title + meta */}
             <div>
-              <div className="flex items-start justify-between gap-4 mb-2">
-                <h3 className="text-2xl font-bold text-gray-900 flex-1">
-                  {complaint.title}
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="text-xl sm:text-2xl font-extrabold text-gray-900 leading-snug">
+                  {safeText(complaint.title, "Untitled complaint")}
                 </h3>
-                {complaint._id && (
-                  <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-lg text-xs font-mono whitespace-nowrap">
+
+                {complaint._id ? (
+                  <span className="shrink-0 rounded-xl border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-mono text-gray-700">
                     ID: {complaint._id.slice(-8)}
                   </span>
-                )}
+                ) : null}
               </div>
 
-              {/* Metadata Badges */}
-              <div className="flex flex-wrap items-center gap-2 mt-3">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <span
-                  className={`px-3 py-1 rounded-full text-xs font-bold uppercase border ${getPriorityColor(
-                    complaint.priority
-                  )}`}
+                  className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${priorityClass}`}
                 >
-                  {complaint.priority} Priority
+                  {safeText(complaint.priority, "medium")} priority
                 </span>
+
                 <span
-                  className={`px-3 py-1 rounded-lg text-xs font-bold ${getCategoryColor(
-                    complaint.category
-                  )}`}
+                  className={`rounded-full border px-3 py-1 text-xs font-bold ${categoryClass}`}
                 >
-                  {complaint.category}
+                  {labelize(complaint.category || "other")}
                 </span>
-                {complaint.status && (
-                  <span className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-lg text-xs font-bold">
-                    {complaint.status.replace("_", " ").toUpperCase()}
+
+                {complaint.status ? (
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800 uppercase">
+                    {String(complaint.status).replaceAll("_", " ")}
                   </span>
-                )}
-                {complaint.visibility && (
-                  <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-medium">
-                    {complaint.visibility === "public"
-                      ? "🌐 Public"
-                      : "🔒 Private"}
+                ) : null}
+
+                {complaint.department ? (
+                  <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-semibold text-gray-700">
+                    Dept: {safeText(complaint.department)}
                   </span>
-                )}
+                ) : null}
               </div>
             </div>
 
             {/* Description */}
-            <div className="bg-gray-50 rounded-xl border border-gray-200 p-4">
-              <h4 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-                <FileText className="w-4 h-4" />
+            <div className="rounded-3xl border border-gray-200 bg-gray-50 p-5">
+              <h4 className="text-sm font-extrabold text-gray-900 flex items-center gap-2">
+                <FileText className="h-4 w-4 text-blue-600" />
                 Description
               </h4>
-              <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">
-                {complaint.description}
+              <p className="mt-2 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
+                {safeText(complaint.description, "No description provided.")}
               </p>
             </div>
 
-            {/* Location */}
-            {complaint.location && (
-              <div className="bg-blue-50 rounded-xl border border-blue-200 p-4">
-                <h4 className="text-sm font-bold text-blue-900 mb-1">
-                  📍 Location
-                </h4>
-                <p className="text-blue-800">{complaint.location}</p>
-              </div>
-            )}
+            {/* Contact Info (exists in your schema) */}
+            {complaint.contactInfo ? (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                  <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+                    Contact name
+                  </p>
+                  <p className="mt-2 text-sm font-extrabold text-gray-900">
+                    {safeText(complaint.contactInfo?.name)}
+                  </p>
+                </div>
 
-            {/* Student Info */}
-            {(complaint.studentName ||
-              complaint.studentId ||
-              complaint.rollNumber) && (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {complaint.studentName && (
-                  <div className="bg-white border border-gray-200 rounded-xl p-4">
-                    <p className="text-xs text-gray-500 mb-1">Student Name</p>
-                    <p className="font-semibold text-gray-900">
-                      {complaint.studentName}
-                    </p>
-                  </div>
-                )}
-                {complaint.studentId && (
-                  <div className="bg-white border border-gray-200 rounded-xl p-4">
-                    <p className="text-xs text-gray-500 mb-1">Student ID</p>
-                    <p className="font-semibold text-gray-900 font-mono">
-                      {complaint.studentId}
-                    </p>
-                  </div>
-                )}
-                {complaint.rollNumber && (
-                  <div className="bg-white border border-gray-200 rounded-xl p-4">
-                    <p className="text-xs text-gray-500 mb-1">Roll Number</p>
-                    <p className="font-semibold text-gray-900 font-mono">
-                      {complaint.rollNumber}
-                    </p>
-                  </div>
-                )}
+                <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                  <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+                    Contact email
+                  </p>
+                  <p className="mt-2 text-sm font-mono font-extrabold text-gray-900 break-all">
+                    {safeText(complaint.contactInfo?.email)}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                  <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+                    Contact phone
+                  </p>
+                  <p className="mt-2 text-sm font-mono font-extrabold text-gray-900">
+                    {safeText(complaint.contactInfo?.phone, "—")}
+                  </p>
+                </div>
               </div>
-            )}
+            ) : null}
 
             {/* Attachments */}
-            {complaint.attachments && complaint.attachments.length > 0 && (
-              <div>
-                <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-                  <Paperclip className="w-4 h-4" />
+            {Array.isArray(complaint.attachments) &&
+            complaint.attachments.length > 0 ? (
+              <div className="space-y-3">
+                <h4 className="text-sm font-extrabold text-gray-900 flex items-center gap-2">
+                  <Paperclip className="h-4 w-4 text-blue-600" />
                   Attachments ({complaint.attachments.length})
                 </h4>
+
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   {complaint.attachments.map((file, idx) => {
-                    const mime =
-                      file.mimeType ||
-                      file.mimetype ||
-                      file.type ||
-                      "application/octet-stream";
-                    const isImg = mime.startsWith("image/");
-
-                    const src =
-                      file.url ||
-                      (file instanceof File ? URL.createObjectURL(file) : "");
+                    const name = getFileName(file, idx);
+                    const url =
+                      getFileUrl(file) || objectUrlsRef.current[idx] || "";
+                    const img = isImageLike(file);
 
                     return (
-                      <div key={idx} className="relative group">
-                        {isImg && src ? (
-                          <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border border-gray-200">
+                      <a
+                        key={`${idx}-${name}`}
+                        href={url || "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="group block rounded-2xl border border-gray-200 bg-white overflow-hidden hover:border-blue-300 hover:shadow-md transition"
+                        onClick={(e) => {
+                          if (!url) e.preventDefault();
+                        }}
+                        title={name}
+                      >
+                        <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden">
+                          {img && url ? (
                             <img
-                              src={src}
-                              alt={
-                                file.name ||
-                                file.originalName ||
-                                `Attachment ${idx + 1}`
-                              }
-                              className="w-full h-full object-cover"
+                              src={url}
+                              alt={name}
+                              className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
                             />
-                          </div>
-                        ) : (
-                          <div className="aspect-square rounded-lg bg-gray-100 border border-gray-200 flex flex-col items-center justify-center p-3">
-                            <FileText className="w-8 h-8 text-gray-400 mb-2" />
-                            <p className="text-xs text-gray-600 text-center truncate w-full">
-                              {file.name || file.originalName || "File"}
-                            </p>
-                          </div>
-                        )}
-                      </div>
+                          ) : (
+                            <div className="p-4 text-center">
+                              <Download className="h-10 w-10 text-gray-400 mx-auto" />
+                              <p className="mt-2 text-xs font-semibold text-gray-700 line-clamp-2">
+                                {name}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </a>
                     );
                   })}
                 </div>
               </div>
-            )}
+            ) : null}
 
             {/* Timestamps */}
-            {complaint.createdAt && (
-              <div className="text-xs text-gray-500 border-t border-gray-200 pt-4">
-                <p>Submitted: {formatDate(complaint.createdAt)}</p>
+            {complaint.createdAt ? (
+              <div className="border-t border-gray-200 pt-4 text-xs text-gray-600 space-y-1">
+                <p>Submitted: {formatDateTime(complaint.createdAt)}</p>
                 {complaint.updatedAt &&
-                  complaint.updatedAt !== complaint.createdAt && (
-                    <p className="mt-1">
-                      Last Updated: {formatDate(complaint.updatedAt)}
-                    </p>
-                  )}
+                complaint.updatedAt !== complaint.createdAt ? (
+                  <p>Last updated: {formatDateTime(complaint.updatedAt)}</p>
+                ) : null}
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Footer */}
           <div className="border-t border-gray-200 bg-gray-50 px-6 py-4">
             <button
+              type="button"
               onClick={onClose}
-              className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-blue-500/30 transition-all hover:bg-blue-700 active:scale-95"
+              className="w-full rounded-2xl bg-blue-600 px-4 py-3 text-sm font-extrabold text-white hover:bg-blue-700 transition shadow-lg shadow-blue-600/20 active:scale-[0.99]"
             >
-              Close Preview
+              Close preview
             </button>
           </div>
-        </div>
+        </motion.div>
       </motion.div>
-    </>
+    </AnimatePresence>
   );
-};
+}
 
-// ================================================================
-// 🚀 MAIN SUBMIT COMPLAINT PAGE
-// ================================================================
-const SubmitComplaint = () => {
+/* ================================================================
+   MAIN PAGE
+================================================================ */
+export default function SubmitComplaint() {
   const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
-  const [submissionState, setSubmissionState] = useState({
-    status: "idle", // 'idle' | 'submitting' | 'success' | 'error'
+  const [state, setState] = useState({
+    status: "idle", // idle | submitting | success | error
     complaintData: null,
     message: "",
   });
-  const [showPreview, setShowPreview] = useState(false);
 
-  // WebSocket connection for real-time admin updates
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const redirectTimerRef = useRef(null);
+
+  const isSubmitting = state.status === "submitting";
+
+  // Staff-only websocket toasts
   useEffect(() => {
-    const wsUrl =
-      import.meta.env.VITE_WS_URL || "ws://localhost:5000/ws/complaints";
+    const isStaff = ["admin", "staff"].includes(user?.role);
+    if (!isStaff) return;
+
     let socket;
-
     try {
-      socket = new WebSocket(wsUrl);
-
-      socket.onopen = () => {
-        // connected
-      };
-
+      socket = new WebSocket(WS_URL);
       socket.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          if (data.type === "NEW_COMPLAINT") {
-            toast.success("New complaint received!", {
-              duration: 3000,
+          const msg = JSON.parse(event.data);
+          if (msg?.type === "NEW_COMPLAINT") {
+            toast.success("New complaint received", {
+              duration: 2500,
               position: "bottom-right",
             });
           }
         } catch {
-          // ignore malformed messages
+          // ignore
         }
       };
-
-      socket.onerror = () => {
-        // optionally handle error UI
-      };
-
-      socket.onclose = () => {
-        // closed
-      };
     } catch {
-      // WebSocket creation failed
+      // ignore
     }
 
     return () => {
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.close();
-      }
+      if (socket && socket.readyState === WebSocket.OPEN) socket.close();
     };
+  }, [user?.role]);
+
+  // Auto redirect after success (unless preview open)
+  useEffect(() => {
+    if (state.status !== "success") return;
+
+    if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    redirectTimerRef.current = setTimeout(() => {
+      if (!previewOpen) navigate("/complaints/my");
+    }, AUTO_REDIRECT_MS);
+
+    return () => {
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    };
+  }, [state.status, navigate, previewOpen]);
+
+  const onSubmitStart = useCallback(() => {
+    setState({ status: "submitting", complaintData: null, message: "" });
   }, []);
 
-  const handleSubmissionStart = useCallback(() => {
-    setSubmissionState({
-      status: "submitting",
-      complaintData: null,
-      message: "",
-    });
-  }, []);
-
-  const handleSubmissionSuccess = useCallback(
-    (complaintData) => {
-      setSubmissionState({
-        status: "success",
-        complaintData,
-        message:
-          "Your complaint has been submitted and is now visible to staff and admins for review.",
-      });
-
-      toast.success("Complaint submitted successfully!", {
-        duration: 2500,
-        position: "top-center",
-        icon: "✅",
-      });
-
-      setTimeout(() => {
-        navigate("/complaints/my");
-      }, 800);
-    },
-    [navigate]
-  );
-
-  const handleSubmissionError = useCallback((errorMessage) => {
-    setSubmissionState({
-      status: "error",
-      complaintData: null,
-      message:
-        errorMessage ||
-        "Failed to submit complaint. Please check your details and try again.",
+  const onSubmitSuccess = useCallback((complaintData) => {
+    setState({
+      status: "success",
+      complaintData,
+      message: "Submitted successfully. Staff will review it shortly.",
     });
 
-    toast.error("Submission failed. Please try again.", {
-      duration: 4000,
+    toast.success("Complaint submitted", {
+      duration: 2000,
       position: "top-center",
     });
   }, []);
 
-  const isSubmitting = submissionState.status === "submitting";
+  const onSubmitError = useCallback((errorMessage) => {
+    setState({
+      status: "error",
+      complaintData: null,
+      message: errorMessage || "Failed to submit complaint. Please try again.",
+    });
 
-  // Guard: login required
+    toast.error("Submission failed", {
+      duration: 3500,
+      position: "top-center",
+    });
+  }, []);
+
   if (!isAuthenticated) {
     return (
       <>
         <Toaster />
-        <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 via-blue-50 to-gray-50 px-4">
-          <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-gray-100 p-8 text-center space-y-4">
-            <div className="w-14 h-14 mx-auto rounded-full bg-blue-100 flex items-center justify-center">
-              <Lock className="w-7 h-7 text-blue-600" />
+        <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 px-4">
+          <div className="max-w-md w-full rounded-3xl border border-gray-200 bg-white shadow-sm p-8 text-center space-y-4">
+            <div className="mx-auto h-14 w-14 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center">
+              <Lock className="h-7 w-7 text-blue-600" />
             </div>
-            <h1 className="text-2xl font-bold text-gray-900">Login Required</h1>
+            <h1 className="text-2xl font-extrabold text-gray-900">
+              Login required
+            </h1>
             <p className="text-sm text-gray-600">
-              Please log in to submit a complaint so we can track it to your
-              account.
+              Log in to submit a complaint so it can be tracked to your account.
             </p>
-            <a
-              href="/login"
-              className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+            <Link
+              to="/login"
+              className="inline-flex items-center justify-center rounded-2xl bg-blue-600 px-6 py-3 text-sm font-extrabold text-white hover:bg-blue-700 transition"
             >
-              Go to Login
-            </a>
+              Go to login
+            </Link>
           </div>
         </main>
       </>
@@ -446,174 +507,185 @@ const SubmitComplaint = () => {
     <>
       <Toaster />
 
-      <main className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-gray-50 py-12 sm:py-16 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-5xl mx-auto">
-          {/* Page Header */}
-          <header className="text-center mb-10 sm:mb-12 animate-fade-in">
-            <div className="inline-block mb-4">
-              <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl flex items-center justify-center shadow-lg transform hover:scale-105 transition-transform duration-300">
-                <FileText className="w-8 h-8 sm:w-10 sm:h-10 text-white" />
-              </div>
+      <main className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-5xl mx-auto space-y-8">
+          {/* Header */}
+          <header className="text-center">
+            <div className="mx-auto mb-4 h-16 w-16 rounded-3xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center shadow-lg">
+              <FileText className="h-8 w-8 text-white" />
             </div>
 
-            <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-gray-900 mb-3 sm:mb-4 tracking-tight">
-              Submit a Complaint
+            <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 tracking-tight">
+              Submit a complaint
             </h1>
-            <p className="text-base sm:text-lg text-gray-600 max-w-2xl mx-auto leading-relaxed px-4">
-              Fill out the form with clear details, attach relevant documents,
-              and your complaint will be instantly saved and visible to staff.
+            <p className="mt-3 text-sm sm:text-base text-gray-600 max-w-2xl mx-auto leading-relaxed">
+              Provide clear details and attachments so staff can resolve it
+              faster.
             </p>
           </header>
 
-          {/* Success Message Card (brief, before redirect) */}
-          <AnimatePresence>
-            {submissionState.status === "success" &&
-              submissionState.complaintData && (
-                <motion.section
-                  initial={{ opacity: 0, y: -20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="mb-6 sm:mb-8 bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-2xl p-6 sm:p-8 shadow-lg"
-                  role="alert"
-                >
-                  <div className="flex items-start gap-3 sm:gap-4">
-                    <CheckCircle className="w-6 h-6 sm:w-8 sm:h-8 text-green-600 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <h2 className="text-lg sm:text-xl font-bold text-green-900 mb-2">
-                        Complaint Submitted Successfully
+          {/* Success / Error banners */}
+          <AnimatePresence mode="wait">
+            {state.status === "success" ? (
+              <motion.section
+                key="success"
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="rounded-3xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 p-6 shadow-sm"
+                role="alert"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle className="h-7 w-7 text-emerald-600 shrink-0" />
+                    <div>
+                      <h2 className="text-lg font-extrabold text-emerald-900">
+                        Submitted successfully
                       </h2>
-                      <p className="text-sm sm:text-base text-green-800">
-                        Redirecting you to your complaints list…
+                      <p className="mt-1 text-sm text-emerald-800">
+                        Redirecting to “My Complaints”… (or open preview below)
                       </p>
                     </div>
                   </div>
-                </motion.section>
-              )}
-          </AnimatePresence>
 
-          {/* Error Message Card */}
-          <AnimatePresence>
-            {submissionState.status === "error" && (
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        state.complaintData && setPreviewOpen(true)
+                      }
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-extrabold text-emerald-800 hover:bg-emerald-50 transition"
+                      disabled={!state.complaintData}
+                    >
+                      <Eye className="h-4 w-4" />
+                      Preview
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => navigate("/complaints/my")}
+                      className="inline-flex items-center justify-center rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-extrabold text-white hover:bg-emerald-700 transition"
+                    >
+                      Go now
+                    </button>
+                  </div>
+                </div>
+              </motion.section>
+            ) : null}
+
+            {state.status === "error" ? (
               <motion.section
-                initial={{ opacity: 0, y: -20 }}
+                key="error"
+                initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="mb-6 sm:mb-8 bg-gradient-to-r from-red-50 to-rose-50 border-2 border-red-300 rounded-2xl p-6 shadow-lg"
+                exit={{ opacity: 0, y: -10 }}
+                className="rounded-3xl border border-rose-200 bg-gradient-to-r from-rose-50 to-red-50 p-6 shadow-sm"
                 role="alert"
               >
-                <div className="flex items-start gap-3 sm:gap-4">
-                  <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="h-6 w-6 text-rose-600 shrink-0" />
                   <div>
-                    <h2 className="text-lg font-semibold text-red-900 mb-1">
-                      Submission Failed
+                    <h2 className="text-lg font-extrabold text-rose-900">
+                      Submission failed
                     </h2>
-                    <p className="text-sm sm:text-base text-red-800">
-                      {submissionState.message}
+                    <p className="mt-1 text-sm text-rose-800">
+                      {state.message}
                     </p>
                   </div>
                 </div>
               </motion.section>
-            )}
+            ) : null}
           </AnimatePresence>
 
-          {/* Complaint Form Container */}
+          {/* Form Card */}
           <section
-            className={`relative bg-white rounded-2xl shadow-xl p-6 sm:p-8 md:p-12 border border-gray-100 transition-all duration-300 ${
+            className={[
+              "relative rounded-3xl border border-gray-200 bg-white shadow-sm p-6 sm:p-8 md:p-10 transition",
               isSubmitting
-                ? "opacity-75 pointer-events-none"
-                : "hover:shadow-2xl"
-            }`}
+                ? "opacity-70 pointer-events-none"
+                : "hover:shadow-lg",
+            ].join(" ")}
           >
-            {isSubmitting && (
-              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl flex items-center justify-center z-10">
+            {isSubmitting ? (
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-3xl bg-white/70 backdrop-blur">
                 <div className="text-center">
-                  <div className="inline-block w-12 h-12 sm:w-16 sm:h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4" />
-                  <p className="text-base sm:text-lg font-semibold text-gray-700">
-                    Submitting your complaint...
+                  <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
+                  <p className="text-sm sm:text-base font-extrabold text-gray-800">
+                    Submitting…
                   </p>
-                  <p className="text-xs sm:text-sm text-gray-500 mt-1">
-                    Please wait while we save your information
-                  </p>
+                  <p className="mt-1 text-xs text-gray-600">Please wait.</p>
                 </div>
               </div>
-            )}
+            ) : null}
 
+            {/* IMPORTANT: ComplaintForm must send category values from CATEGORY_OPTIONS (lowercase). */}
             <ComplaintForm
               currentUser={user}
-              onSubmitStart={handleSubmissionStart}
-              onSubmitSuccess={handleSubmissionSuccess}
-              onSubmitError={handleSubmissionError}
+              categoryOptions={CATEGORY_OPTIONS}
+              priorityOptions={PRIORITY_OPTIONS}
+              onSubmitStart={onSubmitStart}
+              onSubmitSuccess={onSubmitSuccess}
+              onSubmitError={onSubmitError}
               isSubmitting={isSubmitting}
             />
           </section>
 
-          {/* What Happens After You Submit */}
-          <section className="mt-8 sm:mt-12 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-2xl p-6 sm:p-8 shadow-md hover:shadow-lg transition-shadow duration-300">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                <Info className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+          {/* After-submit info (kept as-is, just slightly more consistent) */}
+          <section className="rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-6 sm:p-8 shadow-sm">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="h-10 w-10 rounded-2xl bg-blue-600 flex items-center justify-center">
+                <Info className="h-5 w-5 text-white" />
               </div>
-              <h2 className="text-xl sm:text-2xl font-bold text-blue-900">
-                What Happens After You Submit
+              <h2 className="text-xl sm:text-2xl font-extrabold text-blue-900">
+                What happens next
               </h2>
             </div>
 
-            <div className="grid sm:grid-cols-2 gap-4 sm:gap-6 text-sm sm:text-base">
-              <div className="flex items-start gap-3">
-                <div className="flex-shrink-0 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center mt-0.5">
-                  <span className="text-white text-xs font-bold">1</span>
+            <div className="grid sm:grid-cols-2 gap-4 text-sm text-blue-900">
+              <div className="rounded-2xl border border-blue-200 bg-white/70 p-4">
+                <p className="font-extrabold">Instant save</p>
+                <p className="mt-1 text-blue-800">
+                  Your complaint is stored immediately with attachments.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-blue-200 bg-white/70 p-4">
+                <p className="font-extrabold">Real-time visibility</p>
+                <p className="mt-1 text-blue-800">
+                  Staff can see new submissions quickly in their dashboard.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-blue-200 bg-white/70 p-4 flex gap-3">
+                <Mail className="h-5 w-5 text-blue-700 mt-0.5" />
+                <div>
+                  <p className="font-extrabold">Notifications</p>
+                  <p className="mt-1 text-blue-800">
+                    Status updates appear in “My Complaints”.
+                  </p>
                 </div>
-                <p className="text-blue-900 leading-relaxed">
-                  <span className="font-semibold">Instant Save:</span> Your
-                  complaint is immediately stored in the database with all
-                  attachments.
-                </p>
               </div>
 
-              <div className="flex items-start gap-3">
-                <div className="flex-shrink-0 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center mt-0.5">
-                  <span className="text-white text-xs font-bold">2</span>
+              <div className="rounded-2xl border border-blue-200 bg-white/70 p-4 flex gap-3">
+                <Clock className="h-5 w-5 text-blue-700 mt-0.5" />
+                <div>
+                  <p className="font-extrabold">Response time</p>
+                  <p className="mt-1 text-blue-800">
+                    Most complaints get an initial response within 24–48
+                    business hours.
+                  </p>
                 </div>
-                <p className="text-blue-900 leading-relaxed">
-                  <span className="font-semibold">Real-Time Updates:</span>{" "}
-                  Staff and admins see your complaint instantly in their
-                  dashboards via WebSocket.
-                </p>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <Mail className="flex-shrink-0 w-6 h-6 text-blue-600 mt-0.5" />
-                <p className="text-blue-900 leading-relaxed">
-                  <span className="font-semibold">Notifications:</span> Updates
-                  about status changes are sent to your email and visible in "My
-                  Complaints".
-                </p>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <Clock className="flex-shrink-0 w-6 h-6 text-blue-600 mt-0.5" />
-                <p className="text-blue-900 leading-relaxed">
-                  <span className="font-semibold">Response Time:</span> Most
-                  complaints receive an initial response within 24–48 business
-                  hours.
-                </p>
               </div>
             </div>
           </section>
         </div>
       </main>
 
-      {/* Preview Modal (only used if you keep user on this page instead of redirect) */}
-      <AnimatePresence>
-        {showPreview && submissionState.complaintData && (
-          <ComplaintPreviewModal
-            complaint={submissionState.complaintData}
-            onClose={() => setShowPreview(false)}
-          />
-        )}
-      </AnimatePresence>
+      <ComplaintPreviewModal
+        open={previewOpen}
+        complaint={state.complaintData}
+        onClose={() => setPreviewOpen(false)}
+      />
     </>
   );
-};
-
-export default SubmitComplaint;
+}

@@ -1,27 +1,19 @@
-/**
- * Clear Seeder Script
- * -------------------
- * Removes all data from Users, Complaints, and StatusHistory collections.
- * Usage:
- *   node seeders/clearSeeder.js -d   # Destroy all seed data
- */
+// seeders/clearSeeder.js
+// Removes all data from the database collections
 
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
-const logger = require("../utils/logger");
+const logger = require("../utils/logging/logger");
 const connectDB = require("../config/db");
 
-// Load environment variables
 dotenv.config();
 
 // Import models
-const User = require("../models/UserModel");
-const Complaint = require("../models/Complaint");
-const StatusHistory = require("../models/StatusHistory");
+const User = require("../models/user/user.model");
+const Complaint = require("../models/complaint/complaint.model");
+const StatusHistory = require("../models/complaint/statusHistory.model");
 
-/**
- * Clear all seed data from the database
- */
+// Clear all seed data from database
 const clearData = async () => {
   await connectDB();
   try {
@@ -32,7 +24,7 @@ const clearData = async () => {
     ]);
 
     logger.warn(
-      `⚠️ Seed data cleared successfully:\n` +
+      `⚠️  Seed data cleared successfully:\n` +
         `   - Users removed: ${userResult.deletedCount}\n` +
         `   - Complaints removed: ${complaintResult.deletedCount}\n` +
         `   - StatusHistory removed: ${statusResult.deletedCount}`
@@ -46,9 +38,7 @@ const clearData = async () => {
   }
 };
 
-/**
- * CLI runner
- */
+// CLI runner
 const run = async () => {
   const arg = process.argv[2];
   switch (arg) {
@@ -56,12 +46,12 @@ const run = async () => {
       await clearData();
       break;
     default:
-      logger.info("Usage: node seeders/clearSeeder.js -d (destroy data)");
+      logger.info("Usage: node seeders/clearSeeder.js -d");
       process.exit(0);
   }
 };
 
-// Execute only if run directly
+// Execute if run directly
 if (require.main === module) {
   run();
 }

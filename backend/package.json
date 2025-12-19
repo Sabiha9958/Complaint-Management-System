@@ -9,6 +9,10 @@
     "dev": "nodemon server.js",
     "seed:all": "node seeders/masterSeeder.js -i",
     "seed:clear": "node seeders/masterSeeder.js -d",
+    "seed:wipe": "node seeders/masterSeeder.js -c",
+    "seed:users": "node seeders/userSeeder.js -i",
+    "seed:complaints": "node seeders/complaintSeeder.js -i",
+    "seed:roles": "node seeders/seedRolesPermissions.js",
     "test": "echo \"No tests specified\" && exit 0"
   },
   "keywords": [

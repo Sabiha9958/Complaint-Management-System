@@ -1,34 +1,47 @@
 // src/utils/storage.js
 
-// Very simple key names
 const APP_PREFIX = "cms_v1_";
 
 export const STORAGE_KEYS = Object.freeze({
   AUTH_TOKEN: `${APP_PREFIX}auth_token`,
   REFRESH_TOKEN: `${APP_PREFIX}refresh_token`,
   USER_DATA: `${APP_PREFIX}user_data`,
+
   THEME: `${APP_PREFIX}theme`,
   LANGUAGE: `${APP_PREFIX}language`,
   PREFERENCES: `${APP_PREFIX}preferences`,
+
   AVATAR_PREVIEW: `${APP_PREFIX}avatar_preview`,
   COVER_PREVIEW: `${APP_PREFIX}cover_preview`,
   TEMP_FILES: `${APP_PREFIX}temp_files`,
+
   CACHE_PREFIX: `${APP_PREFIX}cache_`,
   LAST_SYNC: `${APP_PREFIX}last_sync`,
 });
 
-// ---------------------------------------------------------------------------
-// BASE STORAGE (thin wrapper around localStorage)
-// ---------------------------------------------------------------------------
+const AUTH_EVENT = `${APP_PREFIX}auth_changed`;
 
-const safeStorage = (() => {
+export const emitAuthChanged = (detail = {}) => {
   try {
-    const testKey = "__test__";
-    window.localStorage.setItem(testKey, "1");
-    window.localStorage.removeItem(testKey);
-    return window.localStorage;
+    window.dispatchEvent(new CustomEvent(AUTH_EVENT, { detail }));
   } catch {
-    // Fallback in very old/locked environments
+    // ignore
+  }
+};
+
+export const onAuthChanged = (handler) => {
+  const listener = (e) => handler?.(e.detail);
+  window.addEventListener(AUTH_EVENT, listener);
+  return () => window.removeEventListener(AUTH_EVENT, listener);
+};
+
+const createSafeStorage = (engine) => {
+  try {
+    const testKey = `${APP_PREFIX}__test__`;
+    engine.setItem(testKey, "1");
+    engine.removeItem(testKey);
+    return engine;
+  } catch {
     const mem = new Map();
     return {
       getItem: (k) => (mem.has(k) ? mem.get(k) : null),
@@ -41,121 +54,191 @@ const safeStorage = (() => {
       },
     };
   }
-})();
+};
 
-const storage = {
+const safeLocal = createSafeStorage(window.localStorage);
+const safeSession = createSafeStorage(window.sessionStorage);
+
+const createStore = (engine) => ({
   get(key, defaultValue = null) {
     try {
-      const raw = safeStorage.getItem(key);
+      const raw = engine.getItem(key);
       if (raw == null) return defaultValue;
       return JSON.parse(raw);
     } catch {
       return defaultValue;
     }
   },
+
   set(key, value) {
     try {
-      safeStorage.setItem(key, JSON.stringify(value));
+      engine.setItem(key, JSON.stringify(value));
       return true;
     } catch {
       return false;
     }
   },
+
   remove(key) {
     try {
-      safeStorage.removeItem(key);
+      engine.removeItem(key);
       return true;
     } catch {
       return false;
     }
   },
-  clearAll() {
+
+  clearAllAppKeys() {
     try {
-      safeStorage.clear();
+      const toRemove = [];
+      for (let i = 0; i < engine.length; i += 1) {
+        const k = engine.key(i);
+        if (k && k.startsWith(APP_PREFIX)) toRemove.push(k);
+      }
+      toRemove.forEach((k) => engine.removeItem(k));
     } catch {
       // ignore
     }
   },
-  keys() {
-    const keys = [];
-    for (let i = 0; i < safeStorage.length; i++) {
-      const k = safeStorage.key(i);
-      if (k && k.startsWith(APP_PREFIX)) keys.push(k);
-    }
-    return keys;
-  },
+});
+
+export const localStorageService = createStore(safeLocal);
+export const sessionStorageService = createStore(safeSession);
+export default localStorageService;
+
+const normalizeToken = (v) => {
+  if (!v) return null;
+  if (typeof v === "string") return v;
+  if (typeof v === "object" && typeof v.token === "string") return v.token;
+  return null;
 };
 
-export const localStorageService = storage;
-export const sessionStorageService = storage; // kept only for compatibility
+const isPlainObject = (v) => v && typeof v === "object" && !Array.isArray(v);
 
-// ---------------------------------------------------------------------------
-// TOKEN MANAGER
-// ---------------------------------------------------------------------------
+const mergeUser = (prev, next) => {
+  if (!prev) return next;
+  if (!next) return next;
+
+  const merged = { ...prev, ...next };
+
+  // keep existing coverId if next doesn't have it
+  if (next.coverId === undefined && prev.coverId !== undefined)
+    merged.coverId = prev.coverId;
+
+  return merged;
+};
 
 export const TokenManager = {
-  get: () => {
-    const stored = storage.get(STORAGE_KEYS.AUTH_TOKEN);
-    if (!stored) return null;
-    if (typeof stored === "string") return stored;
-    return stored.token ?? null;
+  get() {
+    return normalizeToken(localStorageService.get(STORAGE_KEYS.AUTH_TOKEN));
   },
-  set: (token) => {
-    if (!token || typeof token !== "string") return false;
-    return storage.set(STORAGE_KEYS.AUTH_TOKEN, { token });
-  },
-  remove: () => storage.remove(STORAGE_KEYS.AUTH_TOKEN),
 
-  getRefresh: () => {
-    const stored = storage.get(STORAGE_KEYS.REFRESH_TOKEN);
-    if (!stored) return null;
-    if (typeof stored === "string") return stored;
-    return stored.token ?? null;
-  },
-  setRefresh: (token) => {
-    if (!token || typeof token !== "string") return false;
-    return storage.set(STORAGE_KEYS.REFRESH_TOKEN, { token });
-  },
-  removeRefresh: () => storage.remove(STORAGE_KEYS.REFRESH_TOKEN),
+  set(token) {
+    if (!token) {
+      localStorageService.remove(STORAGE_KEYS.AUTH_TOKEN);
+      emitAuthChanged({ type: "ACCESS_TOKEN_CLEARED" });
+      return true;
+    }
+    if (typeof token !== "string") return false;
 
-  exists: () => Boolean(TokenManager.get()),
+    const ok = localStorageService.set(STORAGE_KEYS.AUTH_TOKEN, { token });
+    if (ok) emitAuthChanged({ type: "ACCESS_TOKEN_SET" });
+    return ok;
+  },
 
-  clearAll: () => {
+  remove() {
+    const ok = localStorageService.remove(STORAGE_KEYS.AUTH_TOKEN);
+    if (ok) emitAuthChanged({ type: "ACCESS_TOKEN_CLEARED" });
+    return ok;
+  },
+
+  getRefresh() {
+    return normalizeToken(localStorageService.get(STORAGE_KEYS.REFRESH_TOKEN));
+  },
+
+  setRefresh(token) {
+    if (!token) {
+      localStorageService.remove(STORAGE_KEYS.REFRESH_TOKEN);
+      emitAuthChanged({ type: "REFRESH_TOKEN_CLEARED" });
+      return true;
+    }
+    if (typeof token !== "string") return false;
+
+    const ok = localStorageService.set(STORAGE_KEYS.REFRESH_TOKEN, { token });
+    if (ok) emitAuthChanged({ type: "REFRESH_TOKEN_SET" });
+    return ok;
+  },
+
+  removeRefresh() {
+    const ok = localStorageService.remove(STORAGE_KEYS.REFRESH_TOKEN);
+    if (ok) emitAuthChanged({ type: "REFRESH_TOKEN_CLEARED" });
+    return ok;
+  },
+
+  exists() {
+    return Boolean(TokenManager.get());
+  },
+
+  clearAll() {
     TokenManager.remove();
     TokenManager.removeRefresh();
   },
-};
 
-// ---------------------------------------------------------------------------
-// USER MANAGER
-// ---------------------------------------------------------------------------
+  getUser() {
+    return UserManager.get();
+  },
+  setUser(user) {
+    return UserManager.set(user);
+  },
+};
 
 export const UserManager = {
-  get: () => storage.get(STORAGE_KEYS.USER_DATA),
-  set: (user) => {
-    if (!user || typeof user !== "object") return false;
-    return storage.set(STORAGE_KEYS.USER_DATA, user);
+  get() {
+    return localStorageService.get(STORAGE_KEYS.USER_DATA);
   },
-  update: (updates) => {
-    const current = UserManager.get() || {};
-    return UserManager.set({ ...current, ...updates });
-  },
-  remove: () => storage.remove(STORAGE_KEYS.USER_DATA),
-  exists: () => Boolean(UserManager.get()),
-  getRole: () => UserManager.get()?.role ?? null,
-};
 
-// ---------------------------------------------------------------------------
-// FILE MANAGER (only what AuthContext uses: avatar/cover previews & temp files)
-// ---------------------------------------------------------------------------
+  set(user) {
+    if (!user) {
+      localStorageService.remove(STORAGE_KEYS.USER_DATA);
+      emitAuthChanged({ type: "USER_CLEARED" });
+      return true;
+    }
+    if (!isPlainObject(user)) return false;
+
+    const current = UserManager.get();
+    const next = mergeUser(current, user);
+
+    if (next?.coverId === undefined) {
+      console.warn("[UserManager.set] stored user has no coverId:", next);
+    }
+
+    const ok = localStorageService.set(STORAGE_KEYS.USER_DATA, next);
+    if (ok) emitAuthChanged({ type: "USER_SET" });
+    return ok;
+  },
+
+  update(updates) {
+    return UserManager.set(updates);
+  },
+
+  remove() {
+    return UserManager.set(null);
+  },
+
+  exists() {
+    return Boolean(UserManager.get());
+  },
+
+  getRole() {
+    return UserManager.get()?.role ?? null;
+  },
+};
 
 export const FileManager = {
   async fileToBase64(file) {
     return new Promise((resolve, reject) => {
-      if (!file || !(file instanceof File)) {
-        reject(new Error("Invalid file"));
-        return;
-      }
+      if (!file || !(file instanceof File))
+        return reject(new Error("Invalid file"));
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
       reader.onerror = (e) => reject(e);
@@ -163,11 +246,10 @@ export const FileManager = {
     });
   },
 
-  // Avatar preview
   async setAvatarPreview(file) {
     try {
       const url = await FileManager.fileToBase64(file);
-      return storage.set(STORAGE_KEYS.AVATAR_PREVIEW, {
+      return localStorageService.set(STORAGE_KEYS.AVATAR_PREVIEW, {
         url,
         name: file.name,
         size: file.size,
@@ -178,17 +260,16 @@ export const FileManager = {
     }
   },
   getAvatarPreview() {
-    return storage.get(STORAGE_KEYS.AVATAR_PREVIEW);
+    return localStorageService.get(STORAGE_KEYS.AVATAR_PREVIEW);
   },
   removeAvatarPreview() {
-    return storage.remove(STORAGE_KEYS.AVATAR_PREVIEW);
+    return localStorageService.remove(STORAGE_KEYS.AVATAR_PREVIEW);
   },
 
-  // Cover preview
   async setCoverPreview(file) {
     try {
       const url = await FileManager.fileToBase64(file);
-      return storage.set(STORAGE_KEYS.COVER_PREVIEW, {
+      return localStorageService.set(STORAGE_KEYS.COVER_PREVIEW, {
         url,
         name: file.name,
         size: file.size,
@@ -199,15 +280,14 @@ export const FileManager = {
     }
   },
   getCoverPreview() {
-    return storage.get(STORAGE_KEYS.COVER_PREVIEW);
+    return localStorageService.get(STORAGE_KEYS.COVER_PREVIEW);
   },
   removeCoverPreview() {
-    return storage.remove(STORAGE_KEYS.COVER_PREVIEW);
+    return localStorageService.remove(STORAGE_KEYS.COVER_PREVIEW);
   },
 
-  // Multiple temp file previews (used if you keep that UI)
   async setFilePreviews(files) {
-    if (!files || !Array.isArray(files)) return false;
+    if (!Array.isArray(files)) return false;
     try {
       const previews = await Promise.all(
         files.map(async (file) => ({
@@ -218,21 +298,16 @@ export const FileManager = {
           type: file.type,
         }))
       );
-      return storage.set(STORAGE_KEYS.TEMP_FILES, previews);
+      return localStorageService.set(STORAGE_KEYS.TEMP_FILES, previews);
     } catch {
       return false;
     }
   },
   getFilePreviews() {
-    return storage.get(STORAGE_KEYS.TEMP_FILES, []);
+    return localStorageService.get(STORAGE_KEYS.TEMP_FILES, []);
   },
   clearFilePreviews() {
-    return storage.remove(STORAGE_KEYS.TEMP_FILES);
-  },
-  removeFilePreview(id) {
-    const all = FileManager.getFilePreviews();
-    const next = all.filter((f) => f.id !== id);
-    return storage.set(STORAGE_KEYS.TEMP_FILES, next);
+    return localStorageService.remove(STORAGE_KEYS.TEMP_FILES);
   },
 
   clearPreviews() {
@@ -240,100 +315,68 @@ export const FileManager = {
     FileManager.removeCoverPreview();
     FileManager.clearFilePreviews();
   },
-
-  formatFileSize(bytes) {
-    if (!bytes) return "0 Bytes";
-    const k = 1024;
-    const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${Math.round((bytes / Math.pow(k, i)) * 100) / 100} ${sizes[i]}`;
-  },
 };
-
-// ---------------------------------------------------------------------------
-// PREFERENCES MANAGER (theme, language, generic prefs)
-// ---------------------------------------------------------------------------
 
 export const PreferencesManager = {
-  get: () => storage.get(STORAGE_KEYS.PREFERENCES, {}),
-  set: (prefs) => storage.set(STORAGE_KEYS.PREFERENCES, prefs || {}),
-  update: (updates) => {
-    const current = PreferencesManager.get();
-    return PreferencesManager.set({ ...current, ...updates });
-  },
-  remove: () => storage.remove(STORAGE_KEYS.PREFERENCES),
+  get: () => localStorageService.get(STORAGE_KEYS.PREFERENCES, {}),
+  set: (prefs) =>
+    localStorageService.set(STORAGE_KEYS.PREFERENCES, prefs || {}),
+  update: (updates) =>
+    PreferencesManager.set({ ...PreferencesManager.get(), ...(updates || {}) }),
 
-  getTheme: () => storage.get(STORAGE_KEYS.THEME, "light"),
-  setTheme: (theme) => (theme ? storage.set(STORAGE_KEYS.THEME, theme) : false),
+  getTheme: () => localStorageService.get(STORAGE_KEYS.THEME, "light"),
+  setTheme: (theme) =>
+    theme ? localStorageService.set(STORAGE_KEYS.THEME, theme) : false,
 
-  getLanguage: () => storage.get(STORAGE_KEYS.LANGUAGE, "en"),
+  getLanguage: () => localStorageService.get(STORAGE_KEYS.LANGUAGE, "en"),
   setLanguage: (lang) =>
-    lang ? storage.set(STORAGE_KEYS.LANGUAGE, lang) : false,
+    lang ? localStorageService.set(STORAGE_KEYS.LANGUAGE, lang) : false,
 };
-
-// ---------------------------------------------------------------------------
-// CACHE MANAGER (simple key/value, no logs)
-// ---------------------------------------------------------------------------
 
 export const CacheManager = {
-  set: (key, value) => storage.set(`${STORAGE_KEYS.CACHE_PREFIX}${key}`, value),
-  get: (key, defaultValue = null) =>
-    storage.get(`${STORAGE_KEYS.CACHE_PREFIX}${key}`, defaultValue),
-  remove: (key) => storage.remove(`${STORAGE_KEYS.CACHE_PREFIX}${key}`),
-  clear: () => {
-    const keys = storage
-      .keys()
-      .filter((k) => k.startsWith(STORAGE_KEYS.CACHE_PREFIX));
-    keys.forEach((k) => storage.remove(k));
-  },
-  setLastSync: () => storage.set(STORAGE_KEYS.LAST_SYNC, Date.now()),
-  getLastSync: () => storage.get(STORAGE_KEYS.LAST_SYNC),
-};
+  set: (key, value) =>
+    localStorageService.set(`${STORAGE_KEYS.CACHE_PREFIX}${key}`, value),
+  get: (key, def = null) =>
+    localStorageService.get(`${STORAGE_KEYS.CACHE_PREFIX}${key}`, def),
+  remove: (key) =>
+    localStorageService.remove(`${STORAGE_KEYS.CACHE_PREFIX}${key}`),
 
-// ---------------------------------------------------------------------------
-// AUTH UTILITIES (no console logs)
-// ---------------------------------------------------------------------------
+  setLastSync: () =>
+    localStorageService.set(STORAGE_KEYS.LAST_SYNC, Date.now()),
+  getLastSync: () => localStorageService.get(STORAGE_KEYS.LAST_SYNC),
+};
 
 export const clearAuth = () => {
   TokenManager.clearAll();
   UserManager.remove();
   FileManager.clearPreviews();
 
-  // legacy keys, removed silently
   try {
-    safeStorage.removeItem("token");
-    safeStorage.removeItem("refreshToken");
-    safeStorage.removeItem("user");
-    safeStorage.removeItem("userRole");
-    safeStorage.removeItem("userName");
+    safeLocal.removeItem("token");
+    safeLocal.removeItem("refreshToken");
+    safeLocal.removeItem("user");
+    safeLocal.removeItem("userRole");
+    safeLocal.removeItem("userName");
   } catch {
     // ignore
   }
+
+  emitAuthChanged({ type: "AUTH_CLEARED" });
 };
 
 export const getUserRole = () => UserManager.getRole();
-
 export const hasRole = (role) => getUserRole() === role;
-
 export const hasAnyRole = (roles) => roles.includes(getUserRole());
-
 export const isAuthenticated = () =>
   TokenManager.exists() && UserManager.exists();
 
-// ---------------------------------------------------------------------------
-// LEGACY SHORTCUT EXPORTS (kept so existing imports keep working)
-// ---------------------------------------------------------------------------
-
 export const getToken = () => TokenManager.get();
-export const setToken = (token) => TokenManager.set(token);
+export const setToken = (t) => TokenManager.set(t);
 export const removeToken = () => TokenManager.remove();
 
 export const getRefreshToken = () => TokenManager.getRefresh();
-export const setRefreshToken = (token) => TokenManager.setRefresh(token);
+export const setRefreshToken = (t) => TokenManager.setRefresh(t);
 
 export const getUser = () => UserManager.get();
-export const setUser = (user) => UserManager.set(user);
-export const removeUser = () => UserManager.remove(user);
-
-// default export (for older code that imports `storage` directly)
-export default storage;
+export const setUser = (u) => UserManager.set(u);
+export const removeUser = () => UserManager.remove();

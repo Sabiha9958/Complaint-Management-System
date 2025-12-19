@@ -1,81 +1,75 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useAuth } from "../../context/AuthContext";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "react-toastify";
 import apiClient from "../../api/apiClient";
+import { useAuth } from "../../context/AuthContext";
 import {
   FiFileText,
   FiPlus,
-  FiFilter,
   FiSearch,
   FiClock,
   FiCheckCircle,
-  FiAlertCircle,
   FiX,
   FiCalendar,
-  FiMapPin,
-  FiUser,
   FiMessageSquare,
   FiPaperclip,
   FiEye,
   FiRefreshCw,
-  FiArchive,
   FiTrash2,
   FiEdit2,
-  FiChevronDown,
-  FiChevronUp,
+  FiAlertCircle,
+  FiLock,
 } from "react-icons/fi";
 
 /* ================================================================
-   🎨 CONFIGURATION
-   ================================================================ */
-
+  CONFIG (backend-aligned)
+================================================================ */
 const STATUS_CONFIG = {
   pending: {
     label: "Pending",
-    color: "bg-yellow-100 text-yellow-800 border-yellow-200",
-    icon: FiClock,
+    chip: "bg-amber-50 text-amber-800 border-amber-200",
+    tab: "text-amber-700 data-[active=true]:bg-amber-50 data-[active=true]:border-amber-200",
+    Icon: FiClock,
   },
   in_progress: {
     label: "In Progress",
-    color: "bg-blue-100 text-blue-800 border-blue-200",
-    icon: FiRefreshCw,
+    chip: "bg-blue-50 text-blue-800 border-blue-200",
+    tab: "text-blue-700 data-[active=true]:bg-blue-50 data-[active=true]:border-blue-200",
+    Icon: FiRefreshCw,
   },
   resolved: {
     label: "Resolved",
-    color: "bg-green-100 text-green-800 border-green-200",
-    icon: FiCheckCircle,
+    chip: "bg-emerald-50 text-emerald-800 border-emerald-200",
+    tab: "text-emerald-700 data-[active=true]:bg-emerald-50 data-[active=true]:border-emerald-200",
+    Icon: FiCheckCircle,
   },
   rejected: {
     label: "Rejected",
-    color: "bg-red-100 text-red-800 border-red-200",
-    icon: FiX,
+    chip: "bg-rose-50 text-rose-800 border-rose-200",
+    tab: "text-rose-700 data-[active=true]:bg-rose-50 data-[active=true]:border-rose-200",
+    Icon: FiX,
+  },
+  closed: {
+    label: "Closed",
+    chip: "bg-slate-50 text-slate-800 border-slate-200",
+    tab: "text-slate-700 data-[active=true]:bg-slate-50 data-[active=true]:border-slate-200",
+    Icon: FiLock,
   },
 };
 
 const PRIORITY_CONFIG = {
-  urgent: {
-    label: "Urgent",
-    color: "text-red-600 bg-red-50 border-red-200",
-  },
+  urgent: { label: "Urgent", chip: "bg-rose-50 text-rose-700 border-rose-200" },
   high: {
     label: "High",
-    color: "text-orange-600 bg-orange-50 border-orange-200",
+    chip: "bg-orange-50 text-orange-700 border-orange-200",
   },
-  medium: {
-    label: "Medium",
-    color: "text-blue-600 bg-blue-50 border-blue-200",
-  },
-  low: {
-    label: "Low",
-    color: "text-gray-600 bg-gray-50 border-gray-200",
-  },
+  medium: { label: "Medium", chip: "bg-blue-50 text-blue-700 border-blue-200" },
+  low: { label: "Low", chip: "bg-slate-50 text-slate-700 border-slate-200" },
 };
 
-/* ================================================================
-   🧩 HELPERS
-   ================================================================ */
+const safeStatus = (s) => (STATUS_CONFIG[s] ? s : "pending");
+const safePriority = (p) => (PRIORITY_CONFIG[p] ? p : "medium");
 
 const formatDate = (dateString) => {
   if (!dateString) return "N/A";
@@ -86,222 +80,327 @@ const formatDate = (dateString) => {
   });
 };
 
-/* ================================================================
-   🗑️ DELETE CONFIRMATION MODAL
-   ================================================================ */
+const parseApiList = (payload) => {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.complaints)) return payload.complaints;
+  return [];
+};
 
-const DeleteModal = ({ isOpen, onClose, onConfirm, isDeleting }) => {
-  if (!isOpen) return null;
+/* ================================================================
+  SMALL HOOKS
+================================================================ */
+function useDebouncedValue(value, delay = 250) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
+/* ================================================================
+  UI PRIMITIVES
+================================================================ */
+const StatCard = ({ title, value, tone = "slate" }) => {
+  const tones = {
+    slate: "bg-slate-50 border-slate-200 text-slate-800",
+    amber: "bg-amber-50 border-amber-200 text-amber-800",
+    emerald: "bg-emerald-50 border-emerald-200 text-emerald-800",
+    rose: "bg-rose-50 border-rose-200 text-rose-800",
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-gray-100"
-      >
-        <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
-          <FiAlertCircle className="w-6 h-6 text-red-600" />
-        </div>
-        <h3 className="text-lg font-bold text-center text-gray-900 mb-2">
-          Delete Complaint?
-        </h3>
-        <p className="text-center text-gray-600 text-sm mb-6">
-          Are you sure you want to delete this complaint? This action cannot be
-          undone.
-        </p>
-        <div className="flex gap-3">
+    <div className={`rounded-2xl border p-4 ${tones[tone] || tones.slate}`}>
+      <p className="text-xs font-semibold uppercase tracking-wide opacity-80">
+        {title}
+      </p>
+      <p className="mt-1 text-2xl font-extrabold">{value}</p>
+    </div>
+  );
+};
+
+const Chip = ({ Icon, children, className = "" }) => (
+  <span
+    className={[
+      "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold",
+      className,
+    ].join(" ")}
+  >
+    {Icon ? <Icon className="h-4 w-4" /> : null}
+    {children}
+  </span>
+);
+
+const IconButton = ({ title, onClick, tone = "slate", children, disabled }) => {
+  const tones = {
+    slate:
+      "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900",
+    blue: "border-blue-200 bg-white text-slate-700 hover:bg-blue-50 hover:text-blue-700",
+    rose: "border-rose-200 bg-white text-slate-700 hover:bg-rose-50 hover:text-rose-700",
+  };
+
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={[
+        "inline-flex h-9 w-9 items-center justify-center rounded-lg border transition",
+        "disabled:opacity-50 disabled:cursor-not-allowed",
+        tones[tone] || tones.slate,
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+};
+
+const SkeletonCard = () => (
+  <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+    <div className="flex items-center justify-between">
+      <div className="h-6 w-28 bg-gray-100 rounded-lg animate-pulse" />
+      <div className="h-5 w-14 bg-gray-100 rounded-lg animate-pulse" />
+    </div>
+    <div className="mt-4 h-5 w-3/4 bg-gray-100 rounded-lg animate-pulse" />
+    <div className="mt-3 space-y-2">
+      <div className="h-4 w-full bg-gray-100 rounded-lg animate-pulse" />
+      <div className="h-4 w-5/6 bg-gray-100 rounded-lg animate-pulse" />
+    </div>
+    <div className="mt-5 flex gap-2">
+      <div className="h-7 w-24 bg-gray-100 rounded-full animate-pulse" />
+      <div className="h-7 w-28 bg-gray-100 rounded-full animate-pulse" />
+    </div>
+  </div>
+);
+
+const StatusTabs = ({ value, onChange, counts }) => {
+  const tabs = [
+    { key: "all", label: "All" },
+    ...Object.keys(STATUS_CONFIG).map((k) => ({
+      key: k,
+      label: STATUS_CONFIG[k].label,
+    })),
+  ];
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {tabs.map((t) => {
+        const active = value === t.key;
+        const cfg = STATUS_CONFIG[t.key];
+        return (
           <button
-            onClick={onClose}
-            disabled={isDeleting}
-            className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition"
+            key={t.key}
+            type="button"
+            data-active={active}
+            onClick={() => onChange(t.key)}
+            className={[
+              "inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition",
+              "bg-white hover:bg-gray-50",
+              active ? "border-gray-300" : "border-gray-200",
+              cfg?.tab ||
+                "text-gray-700 data-[active=true]:bg-gray-50 data-[active=true]:border-gray-200",
+            ].join(" ")}
           >
-            Cancel
+            {cfg?.Icon ? <cfg.Icon className="h-4 w-4" /> : null}
+            <span>{t.label}</span>
+            <span className="ml-1 rounded-lg bg-gray-100 px-2 py-0.5 text-xs font-bold text-gray-700">
+              {counts?.[t.key] ?? 0}
+            </span>
           </button>
-          <button
-            onClick={onConfirm}
-            disabled={isDeleting}
-            className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition flex items-center justify-center gap-2"
-          >
-            {isDeleting ? (
-              <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
-            ) : (
-              <FiTrash2 />
-            )}
-            Delete
-          </button>
-        </div>
-      </motion.div>
+        );
+      })}
     </div>
   );
 };
 
 /* ================================================================
-   🎴 COMPLAINT CARD
-   ================================================================ */
+  DELETE MODAL
+================================================================ */
+const DeleteModal = ({ isOpen, onClose, onConfirm, isDeleting }) => (
+  <AnimatePresence>
+    {isOpen ? (
+      <motion.div
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        role="dialog"
+        aria-modal="true"
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ opacity: 0, y: 12, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 12, scale: 0.98 }}
+          onClick={(e) => e.stopPropagation()}
+          className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white shadow-2xl"
+        >
+          <div className="p-6">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 border border-rose-200">
+              <FiAlertCircle className="h-6 w-6 text-rose-600" />
+            </div>
 
-const ComplaintCard = ({ complaint, onDeleteClick, onEditClick }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const {
-    _id,
-    title,
-    description,
-    status,
-    priority,
-    category,
-    location,
-    createdAt,
-    updatedAt,
-    attachments = [],
-    comments = [],
-  } = complaint;
+            <h3 className="text-lg font-bold text-gray-900 text-center">
+              Delete complaint?
+            </h3>
+            <p className="mt-2 text-sm text-gray-600 text-center">
+              This action cannot be undone.
+            </p>
 
-  const statusInfo = STATUS_CONFIG[status] || STATUS_CONFIG.pending;
-  const priorityInfo = PRIORITY_CONFIG[priority] || PRIORITY_CONFIG.medium;
-  const StatusIcon = statusInfo.icon;
+            <div className="mt-6 grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isDeleting}
+                className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-100 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
 
-  // Only allow edit/delete while pending
-  const canEditOrDelete = status === "pending";
+              <button
+                type="button"
+                onClick={onConfirm}
+                disabled={isDeleting}
+                className="rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 transition disabled:opacity-50 inline-flex items-center justify-center gap-2"
+              >
+                {isDeleting ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                ) : (
+                  <FiTrash2 className="h-4 w-4" />
+                )}
+                Delete
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      </motion.div>
+    ) : null}
+  </AnimatePresence>
+);
+
+/* ================================================================
+  CARD (location removed)
+================================================================ */
+const ComplaintCard = ({ complaint, onEdit, onDelete }) => {
+  const statusKey = safeStatus(complaint?.status);
+  const priorityKey = safePriority(complaint?.priority);
+
+  const status = STATUS_CONFIG[statusKey];
+  const priority = PRIORITY_CONFIG[priorityKey];
+
+  const canEditOrDelete = statusKey === "pending";
+
+  const attachmentCount = complaint?.attachments?.length || 0;
+  const commentCount = complaint?.comments?.length || 0;
 
   return (
     <motion.article
-      layout
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-all duration-200 overflow-hidden flex flex-col h-full"
+      exit={{ opacity: 0, scale: 0.98 }}
+      whileHover={{ y: -3 }}
+      transition={{ duration: 0.18 }}
+      className="group rounded-2xl border border-gray-200 bg-white shadow-sm hover:shadow-lg transition overflow-hidden flex flex-col"
     >
-      {/* Top: status + priority */}
-      <div className="px-5 py-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-        <div className="flex gap-2">
-          <span
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border ${statusInfo.color}`}
-          >
-            <StatusIcon className="w-3.5 h-3.5" />
-            {statusInfo.label}
-          </span>
-          <span
-            className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium border ${priorityInfo.color}`}
-          >
-            {priorityInfo.label} Priority
-          </span>
+      {/* Top bar */}
+      <div className="px-5 py-3 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip Icon={status.Icon} className={status.chip}>
+            {status.label}
+          </Chip>
+          <Chip className={priority.chip}>{priority.label} priority</Chip>
+          {complaint?.category ? (
+            <Chip className="bg-indigo-50 text-indigo-700 border-indigo-200">
+              {String(complaint.category).replaceAll("_", " ")}
+            </Chip>
+          ) : null}
+          {complaint?.department ? (
+            <Chip className="bg-slate-50 text-slate-700 border-slate-200">
+              {complaint.department}
+            </Chip>
+          ) : null}
         </div>
-        <span className="text-xs text-gray-400 font-mono">
-          #{_id.slice(-6).toUpperCase()}
+
+        <span className="text-[11px] font-mono text-gray-400">
+          #
+          {String(complaint?._id || "")
+            .slice(-6)
+            .toUpperCase()}
         </span>
       </div>
 
       {/* Body */}
       <div className="p-5 flex-1">
-        {/* Header */}
-        <div className="flex justify-between items-start mb-3">
-          <div>
-            <h3 className="text-lg font-bold text-gray-900 leading-tight mb-1">
-              {title}
-            </h3>
-            {category && (
-              <span className="inline-flex items-center gap-1 text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
-                <FiFileText className="w-3 h-3" /> {category}
-              </span>
+        <h3 className="text-base font-bold text-gray-900 leading-snug line-clamp-2">
+          {complaint?.title || "Untitled"}
+        </h3>
+
+        <p className="mt-2 text-sm text-gray-600 leading-relaxed line-clamp-3">
+          {complaint?.description || "No description provided."}
+        </p>
+
+        {/* Date info */}
+        <div className="mt-4 inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+          <FiCalendar className="h-4 w-4 text-gray-400" />
+          <span>Submitted: {formatDate(complaint?.createdAt)}</span>
+        </div>
+
+        {(attachmentCount > 0 || commentCount > 0) && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {attachmentCount > 0 && (
+              <Chip className="bg-blue-50 text-blue-700 border-blue-200">
+                <FiPaperclip className="h-4 w-4" />
+                {attachmentCount} file{attachmentCount > 1 ? "s" : ""}
+              </Chip>
             )}
-          </div>
-        </div>
-
-        {/* Description (expandable) */}
-        <div className="mb-4">
-          <p
-            className={`text-gray-600 text-sm leading-relaxed ${
-              !isExpanded && "line-clamp-3"
-            }`}
-          >
-            {description}
-          </p>
-          {description && description.length > 150 && (
-            <button
-              onClick={() => setIsExpanded((prev) => !prev)}
-              className="text-blue-600 text-xs font-medium mt-1 flex items-center gap-1 hover:underline"
-            >
-              {isExpanded ? (
-                <>
-                  Show Less <FiChevronUp />
-                </>
-              ) : (
-                <>
-                  Read More <FiChevronDown />
-                </>
-              )}
-            </button>
-          )}
-        </div>
-
-        {/* Meta grid */}
-        <div className="grid grid-cols-2 gap-y-3 gap-x-4 text-xs text-gray-500 border-t border-gray-100 pt-3">
-          <div className="flex items-center gap-2">
-            <FiCalendar className="w-4 h-4 text-gray-400" />
-            <span>Submitted: {formatDate(createdAt)}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <FiMapPin className="w-4 h-4 text-gray-400" />
-            <span className="truncate">
-              {location || "No location specified"}
-            </span>
-          </div>
-          {updatedAt && updatedAt !== createdAt && (
-            <div className="flex items-center gap-2 col-span-2">
-              <FiRefreshCw className="w-4 h-4 text-gray-400" />
-              <span>Updated: {formatDate(updatedAt)}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Attachments & comments badges */}
-        {(attachments.length > 0 || comments.length > 0) && (
-          <div className="flex gap-3 mt-4">
-            {attachments.length > 0 && (
-              <span className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100">
-                <FiPaperclip /> {attachments.length} file
-                {attachments.length > 1 ? "s" : ""}
-              </span>
-            )}
-            {comments.length > 0 && (
-              <span className="flex items-center gap-1 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded border border-purple-100">
-                <FiMessageSquare /> {comments.length} comment
-                {comments.length > 1 ? "s" : ""}
-              </span>
+            {commentCount > 0 && (
+              <Chip className="bg-purple-50 text-purple-700 border-purple-200">
+                <FiMessageSquare className="h-4 w-4" />
+                {commentCount} comment{commentCount > 1 ? "s" : ""}
+              </Chip>
             )}
           </div>
         )}
+
+        {complaint?.updatedAt &&
+        complaint?.updatedAt !== complaint?.createdAt ? (
+          <p className="mt-3 text-[11px] text-gray-400">
+            Last updated: {formatDate(complaint.updatedAt)}
+          </p>
+        ) : null}
       </div>
 
-      {/* Footer actions */}
-      <div className="px-5 py-3 bg-gray-50 border-t border-gray-200 flex justify-between items-center gap-2">
-        <div className="flex gap-2">
+      {/* Footer */}
+      <div className="px-5 py-3 border-t border-gray-200 bg-gray-50 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
           {canEditOrDelete && (
             <>
-              <button
-                onClick={() => onEditClick(_id)}
-                className="flex items-center justify-center w-8 h-8 rounded text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition border border-gray-200 bg-white"
-                title="Edit complaint"
+              <IconButton
+                title="Edit"
+                onClick={() => onEdit(complaint._id)}
+                tone="blue"
               >
-                <FiEdit2 className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => onDeleteClick(_id)}
-                className="flex items-center justify-center w-8 h-8 rounded text-gray-600 hover:text-red-600 hover:bg-red-50 transition border border-gray-200 bg-white"
-                title="Delete complaint"
+                <FiEdit2 className="h-4 w-4" />
+              </IconButton>
+              <IconButton
+                title="Delete"
+                onClick={() => onDelete(complaint._id)}
+                tone="rose"
               >
-                <FiTrash2 className="w-4 h-4" />
-              </button>
+                <FiTrash2 className="h-4 w-4" />
+              </IconButton>
             </>
           )}
         </div>
 
         <Link
-          to={`/complaints/${_id}`}
-          className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 hover:text-blue-600 transition shadow-sm"
+          to={`/complaints/${complaint._id}`}
+          className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 hover:text-blue-700 transition"
         >
-          <FiEye className="w-4 h-4" />
-          View details
+          <FiEye className="h-4 w-4" />
+          View
         </Link>
       </div>
     </motion.article>
@@ -309,104 +408,141 @@ const ComplaintCard = ({ complaint, onDeleteClick, onEditClick }) => {
 };
 
 /* ================================================================
-   🚀 MAIN COMPONENT: MY COMPLAINTS
-   ================================================================ */
-
-const MyComplaints = () => {
+  MAIN PAGE
+================================================================ */
+export default function MyComplaints() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
   const [complaints, setComplaints] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
-  // filters
   const [filterStatus, setFilterStatus] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState("newest"); // newest | oldest
+  const debouncedSearch = useDebouncedValue(searchTerm, 250);
+  const [sortBy, setSortBy] = useState("newest");
 
-  // delete state
-  const [deleteModal, setDeleteModal] = useState({
-    isOpen: false,
-    id: null,
-  });
+  const [deleteModal, setDeleteModal] = useState({ isOpen: false, id: null });
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Fetch "my" complaints
-  useEffect(() => {
-    const fetchComplaints = async () => {
-      setLoading(true);
-      try {
-        const { data } = await apiClient.get("/complaints/my");
-        const list = Array.isArray(data) ? data : data.data || [];
-        setComplaints(list);
-      } catch (error) {
-        console.error("Error fetching complaints:", error);
-        toast.error("Failed to load your complaints.");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchComplaints();
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const res = await apiClient.get("/complaints/my");
+      const list = parseApiList(res?.data ?? res);
+      setComplaints(list);
+    } catch (err) {
+      console.error(err);
+      setLoadError("Failed to load your complaints.");
+      toast.error("Failed to load your complaints.");
+      setComplaints([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // WebSocket live updates for this user
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Optional: websocket sync
   useEffect(() => {
     if (!user) return;
     const wsUrl =
       import.meta.env.VITE_WS_URL || "ws://localhost:5000/ws/complaints";
-    let socket;
+    const socket = new WebSocket(wsUrl);
 
-    try {
-      socket = new WebSocket(wsUrl);
-      socket.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === "UPDATED_COMPLAINT" && msg.data?.user === user._id) {
-            setComplaints((prev) =>
-              prev.map((c) => (c._id === msg.data._id ? msg.data : c))
-            );
-          } else if (
-            msg.type === "NEW_COMPLAINT" &&
-            msg.data?.user === user._id
-          ) {
-            setComplaints((prev) => [msg.data, ...prev]);
-          }
-        } catch (err) {
-          console.error("WebSocket parse error:", err);
+    socket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "UPDATED_COMPLAINT" && msg.data?.user === user._id) {
+          setComplaints((prev) =>
+            prev.map((c) => (c._id === msg.data._id ? msg.data : c))
+          );
         }
-      };
-    } catch (err) {
-      console.error("WebSocket error:", err);
-    }
 
-    return () => {
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.close();
+        if (msg.type === "NEW_COMPLAINT" && msg.data?.user === user._id) {
+          setComplaints((prev) => [msg.data, ...prev]);
+        }
+      } catch (e) {
+        console.error("WS parse error", e);
       }
     };
+
+    return () => socket.close();
   }, [user]);
 
-  // Edit handler: go to dedicated edit page
-  const handleEditClick = (id) => {
-    navigate(`/complaints/${id}/edit`);
-  };
+  const counts = useMemo(() => {
+    const by = { all: complaints.length };
+    Object.keys(STATUS_CONFIG).forEach((k) => {
+      by[k] = complaints.filter((c) => safeStatus(c.status) === k).length;
+    });
+    return by;
+  }, [complaints]);
 
-  // Delete flow
-  const initiateDelete = (id) => {
+  const stats = useMemo(() => {
+    const total = complaints.length;
+    const pending = complaints.filter(
+      (c) => safeStatus(c.status) === "pending"
+    ).length;
+    const resolved = complaints.filter(
+      (c) => safeStatus(c.status) === "resolved"
+    ).length;
+    const rejected = complaints.filter(
+      (c) => safeStatus(c.status) === "rejected"
+    ).length;
+    return { total, pending, resolved, rejected };
+  }, [complaints]);
+
+  const filteredComplaints = useMemo(() => {
+    let result = [...complaints];
+
+    if (filterStatus !== "all") {
+      result = result.filter((c) => safeStatus(c.status) === filterStatus);
+    }
+
+    if (debouncedSearch.trim()) {
+      const s = debouncedSearch.toLowerCase();
+      result = result.filter(
+        (c) =>
+          c.title?.toLowerCase().includes(s) ||
+          c.description?.toLowerCase().includes(s) ||
+          c._id?.toLowerCase().includes(s) ||
+          c.department?.toLowerCase().includes(s) ||
+          c.category?.toLowerCase().includes(s)
+      );
+    }
+
+    result.sort((a, b) => {
+      const da = new Date(a.createdAt).getTime();
+      const db = new Date(b.createdAt).getTime();
+      return sortBy === "oldest" ? da - db : db - da;
+    });
+
+    return result;
+  }, [complaints, filterStatus, debouncedSearch, sortBy]);
+
+  const onEdit = (id) => navigate(`/complaints/${id}/edit`);
+
+  const onDeleteStart = (id) => {
     const target = complaints.find((c) => c._id === id);
-    if (target && target.status !== "pending") {
+    if (target && safeStatus(target.status) !== "pending") {
       toast.error("You can only delete complaints that are still pending.");
       return;
     }
     setDeleteModal({ isOpen: true, id });
   };
 
-  const confirmDelete = async () => {
+  const onDeleteConfirm = async () => {
     if (!deleteModal.id) return;
+
     setIsDeleting(true);
     try {
       const target = complaints.find((c) => c._id === deleteModal.id);
-      if (target && target.status !== "pending") {
+      if (target && safeStatus(target.status) !== "pending") {
         throw new Error(
           "You can only delete complaints that are still pending."
         );
@@ -416,11 +552,10 @@ const MyComplaints = () => {
       setComplaints((prev) => prev.filter((c) => c._id !== deleteModal.id));
       toast.success("Complaint deleted.");
       setDeleteModal({ isOpen: false, id: null });
-    } catch (error) {
-      console.error("Failed to delete complaint:", error);
+    } catch (err) {
       toast.error(
-        error.response?.data?.message ||
-          error.message ||
+        err?.response?.data?.message ||
+          err?.message ||
           "Failed to delete complaint."
       );
     } finally {
@@ -428,170 +563,178 @@ const MyComplaints = () => {
     }
   };
 
-  // Filter + sort
-  const filteredComplaints = useMemo(() => {
-    let result = [...complaints];
-
-    if (filterStatus !== "all") {
-      result = result.filter((c) => c.status === filterStatus);
-    }
-
-    if (searchTerm.trim()) {
-      const search = searchTerm.toLowerCase();
-      result = result.filter(
-        (c) =>
-          c.title?.toLowerCase().includes(search) ||
-          c.description?.toLowerCase().includes(search) ||
-          c._id?.toLowerCase().includes(search)
-      );
-    }
-
-    if (sortBy === "newest") {
-      result.sort(
-        (a, b) =>
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
-    } else if (sortBy === "oldest") {
-      result.sort(
-        (a, b) =>
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      );
-    }
-
-    return result;
-  }, [complaints, filterStatus, searchTerm, sortBy]);
-
-  // Stats
-  const stats = {
-    total: complaints.length,
-    pending: complaints.filter((c) => c.status === "pending").length,
-    resolved: complaints.filter((c) => c.status === "resolved").length,
+  const clearFilters = () => {
+    setFilterStatus("all");
+    setSearchTerm("");
+    setSortBy("newest");
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" />
-          <p className="text-gray-600 font-medium">
-            Loading your complaints...
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <main className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 py-8 px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl space-y-6">
         {/* Header */}
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-              <FiFileText className="text-blue-600" /> My Complaints
-            </h1>
-            <p className="text-gray-500 text-sm mt-1">
-              Manage your submitted complaints and track their progress.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:flex gap-4 mr-4 text-sm text-gray-600">
-              <span>
-                Total: <b>{stats.total}</b>
-              </span>
-              <span className="text-yellow-600">
-                Pending: <b>{stats.pending}</b>
-              </span>
-              <span className="text-green-600">
-                Resolved: <b>{stats.resolved}</b>
-              </span>
+        <header className="rounded-3xl border border-gray-200 bg-white shadow-sm p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 flex items-center gap-2">
+                <FiFileText className="text-blue-600" />
+                My Complaints
+              </h1>
+              <p className="mt-1 text-sm text-gray-600">
+                Track progress, edit pending items, and manage your submissions.
+              </p>
             </div>
-            <Link
-              to="/complaints/new"
-              className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 transition shadow-lg shadow-blue-200"
-            >
-              <FiPlus className="w-5 h-5" /> New Complaint
-            </Link>
+
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full sm:w-auto">
+                <StatCard title="Total" value={stats.total} tone="slate" />
+                <StatCard title="Pending" value={stats.pending} tone="amber" />
+                <StatCard
+                  title="Resolved"
+                  value={stats.resolved}
+                  tone="emerald"
+                />
+                <StatCard title="Rejected" value={stats.rejected} tone="rose" />
+              </div>
+
+              <Link
+                to="/complaints/new"
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white hover:bg-blue-700 transition shadow-lg shadow-blue-200"
+              >
+                <FiPlus className="h-5 w-5" />
+                New complaint
+              </Link>
+            </div>
           </div>
         </header>
 
         {/* Filters */}
-        <section className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row gap-4 items-center">
-          <div className="relative flex-1 w-full">
+        <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <StatusTabs
+              value={filterStatus}
+              onChange={setFilterStatus}
+              counts={counts}
+            />
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100 transition"
+              >
+                Clear
+              </button>
+
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="relative">
             <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
-              type="text"
-              placeholder="Search by title, description or ID..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+              placeholder="Search title, description, ID, category, department..."
+              className="w-full rounded-xl border border-gray-200 bg-white pl-10 pr-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
             />
-          </div>
-          <div className="flex w-full md:w-auto gap-2">
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="flex-1 md:w-40 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-            >
-              <option value="all">All Status</option>
-              <option value="pending">Pending</option>
-              <option value="in_progress">In Progress</option>
-              <option value="resolved">Resolved</option>
-              <option value="rejected">Rejected</option>
-            </select>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="flex-1 md:w-40 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-            >
-              <option value="newest">Newest First</option>
-              <option value="oldest">Oldest First</option>
-            </select>
           </div>
         </section>
 
-        {/* List */}
-        <AnimatePresence mode="wait">
-          {filteredComplaints.length === 0 ? (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-center py-20 bg-white rounded-2xl border border-dashed border-gray-300"
-            >
-              <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                <FiFilter className="w-8 h-8 text-gray-400" />
-              </div>
-              <h3 className="text-lg font-medium text-gray-900">
-                No complaints found
-              </h3>
-              <p className="text-gray-500 mt-1">
-                Try adjusting your filters or submit a new complaint.
-              </p>
-            </motion.div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredComplaints.map((complaint) => (
-                <ComplaintCard
-                  key={complaint._id}
-                  complaint={complaint}
-                  onDeleteClick={initiateDelete}
-                  onEditClick={handleEditClick}
-                />
-              ))}
+        {/* Content */}
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <SkeletonCard key={i} />
+            ))}
+          </div>
+        ) : loadError ? (
+          <div className="rounded-3xl border border-rose-200 bg-rose-50 p-10 text-center">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-white border border-rose-200">
+              <FiAlertCircle className="h-7 w-7 text-rose-600" />
             </div>
-          )}
-        </AnimatePresence>
+            <h3 className="text-lg font-bold text-rose-900">{loadError}</h3>
+            <p className="mt-1 text-sm text-rose-800">
+              Try again or check your connection.
+            </p>
+            <button
+              type="button"
+              onClick={load}
+              className="mt-4 rounded-2xl bg-rose-600 px-5 py-3 text-sm font-bold text-white hover:bg-rose-700 transition"
+            >
+              Retry
+            </button>
+          </div>
+        ) : (
+          <AnimatePresence mode="wait">
+            {filteredComplaints.length === 0 ? (
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="rounded-3xl border border-dashed border-gray-300 bg-white p-14 text-center"
+              >
+                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-50 border border-gray-200">
+                  <FiAlertCircle className="h-7 w-7 text-gray-400" />
+                </div>
+                <h3 className="text-lg font-bold text-gray-900">
+                  No complaints found
+                </h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Try clearing filters or create a new complaint.
+                </p>
+                <div className="mt-5 flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="rounded-2xl border border-gray-200 bg-gray-50 px-5 py-3 text-sm font-bold text-gray-800 hover:bg-gray-100 transition"
+                  >
+                    Clear filters
+                  </button>
+                  <Link
+                    to="/complaints/new"
+                    className="rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white hover:bg-blue-700 transition"
+                  >
+                    Create complaint
+                  </Link>
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="grid"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+              >
+                {filteredComplaints.map((c) => (
+                  <ComplaintCard
+                    key={c._id}
+                    complaint={c}
+                    onEdit={onEdit}
+                    onDelete={onDeleteStart}
+                  />
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        )}
       </div>
 
-      {/* Delete Modal */}
       <DeleteModal
         isOpen={deleteModal.isOpen}
         onClose={() => setDeleteModal({ isOpen: false, id: null })}
-        onConfirm={confirmDelete}
+        onConfirm={onDeleteConfirm}
         isDeleting={isDeleting}
       />
     </main>
   );
-};
-
-export default MyComplaints;
+}

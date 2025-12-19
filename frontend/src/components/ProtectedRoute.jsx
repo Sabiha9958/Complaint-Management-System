@@ -1,10 +1,8 @@
-// src/routes/ProtectedRoute.jsx
-
 import React, { useState, useEffect } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
-// Loading Spinner Component
+// simple full-screen loading spinner
 const LoadingSpinner = () => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
     <div className="text-center">
@@ -25,7 +23,7 @@ const LoadingSpinner = () => (
   </div>
 );
 
-// Delayed Spinner Hook
+// delay spinner for short loads
 const useDelayedSpinner = (loading, delay = 300) => {
   const [showSpinner, setShowSpinner] = useState(false);
 
@@ -41,7 +39,7 @@ const useDelayedSpinner = (loading, delay = 300) => {
   return showSpinner;
 };
 
-// Protected Route Component
+// protected route wrapper
 const ProtectedRoute = ({ children, allowedRoles = [] }) => {
   const { user, loading, isInitialized } = useAuth();
   const location = useLocation();
@@ -49,22 +47,23 @@ const ProtectedRoute = ({ children, allowedRoles = [] }) => {
   const checkingAuth = loading || !isInitialized;
   const showSpinner = useDelayedSpinner(checkingAuth);
 
-  // Show spinner while initializing auth
+  // show spinner while auth state is resolving
   if (checkingAuth && showSpinner) {
     return <LoadingSpinner />;
   }
 
-  // Not logged in → redirect to login
+  // unauthenticated → redirect to login
   if (!user && isInitialized) {
     return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
 
-  // Role check when allowedRoles provided
+  // role not allowed → redirect home
   if (user && allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
     return <Navigate to="/" state={{ error: "Access denied" }} replace />;
   }
 
-  return children;
+  // authorized → render target
+  return <>{children}</>;
 };
 
 export default ProtectedRoute;

@@ -1,18 +1,11 @@
-/**
- * ================================================================
- * 🔍 COMPLAINT FILTERS COMPONENT
- * ================================================================
- * Advanced filtering interface with:
- * - Search functionality
- * - Status/Category/Priority filters
- * - Active filter indicators
- * - Reset functionality
- * - Responsive design
- * ================================================================
- */
-
-import React, { useMemo } from "react";
-import { FiSearch, FiX, FiFilter } from "react-icons/fi";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FiChevronDown,
+  FiChevronUp,
+  FiFilter,
+  FiSearch,
+  FiX,
+} from "react-icons/fi";
 import {
   COMPLAINT_STATUS,
   COMPLAINT_PRIORITY,
@@ -22,343 +15,325 @@ import {
   CATEGORY_LABELS,
 } from "../../utils/constants";
 
-// ================================================================
-// 🛠️ UTILITY FUNCTIONS
-// ================================================================
+const cx = (...c) => c.filter(Boolean).join(" ");
 
-/**
- * Count active filters
- */
-const countActiveFilters = (filters) => {
-  let count = 0;
-  if (filters.search) count++;
-  if (filters.status) count++;
-  if (filters.category) count++;
-  if (filters.priority) count++;
-  return count;
-};
+const buildOptions = (enumObj, labels) =>
+  Object.values(enumObj).map((value) => ({
+    value,
+    label: labels?.[value] || value,
+  }));
 
-// ================================================================
-// 🎨 SUB-COMPONENTS
-// ================================================================
+const countActive = (v) =>
+  Number(Boolean(v.search?.trim())) +
+  Number(Boolean(v.status)) +
+  Number(Boolean(v.category)) +
+  Number(Boolean(v.priority));
 
-/**
- * Filter Select Component
- */
-const FilterSelect = ({
+const Chip = memo(function Chip({ children, onRemove }) {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">
+      {children}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="rounded-lg p-1 hover:bg-blue-100"
+        aria-label="Remove filter"
+      >
+        <FiX className="h-3.5 w-3.5" />
+      </button>
+    </span>
+  );
+});
+
+const FieldLabel = memo(function FieldLabel({ htmlFor, children }) {
+  return (
+    <label
+      htmlFor={htmlFor}
+      className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-gray-600"
+    >
+      {children}
+    </label>
+  );
+});
+
+const SelectField = memo(function SelectField({
+  id,
   label,
-  name,
   value,
   options,
   onChange,
   placeholder,
-}) => {
-  const hasValue = Boolean(value);
+}) {
+  const has = Boolean(value);
 
   return (
-    <div className="relative">
-      <label
-        htmlFor={name}
-        className="block text-xs font-bold text-gray-600 uppercase tracking-wider mb-2"
-      >
-        {label}
-      </label>
-      <select
-        id={name}
-        name={name}
-        value={value}
-        onChange={onChange}
-        className={`w-full px-4 py-3 border-2 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none bg-white transition-all ${
-          hasValue
-            ? "border-blue-500 bg-blue-50"
-            : "border-gray-300 hover:border-gray-400"
-        }`}
-        aria-label={`Filter by ${label.toLowerCase()}`}
-      >
-        <option value="">{placeholder || `All ${label}`}</option>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-      {hasValue && (
-        <div className="absolute right-3 top-9 pointer-events-none">
-          <div className="w-2 h-2 bg-blue-500 rounded-full" />
-        </div>
-      )}
-    </div>
-  );
-};
-
-/**
- * Search Input Component
- */
-const SearchInput = ({ value, onChange, placeholder }) => {
-  return (
-    <div className="relative">
-      <label
-        htmlFor="search"
-        className="block text-xs font-bold text-gray-600 uppercase tracking-wider mb-2"
-      >
-        Search
-      </label>
+    <div>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <div className="relative">
-        <FiSearch
-          className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none"
-          aria-hidden="true"
-        />
-        <input
-          id="search"
-          type="search"
-          name="search"
+        <select
+          id={id}
           value={value}
-          onChange={onChange}
-          placeholder={placeholder || "Search complaints..."}
-          className={`w-full pl-12 pr-4 py-3 border-2 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all ${
-            value
-              ? "border-blue-500 bg-blue-50"
-              : "border-gray-300 hover:border-gray-400"
-          }`}
-          aria-label="Search complaints"
-        />
-        {value && (
+          onChange={(e) => onChange(e.target.value)}
+          className={cx(
+            "w-full appearance-none rounded-2xl border-2 px-4 py-3 text-sm font-semibold outline-none transition",
+            "focus:border-blue-500 focus:ring-4 focus:ring-blue-100",
+            has
+              ? "border-blue-400 bg-blue-50/50"
+              : "border-gray-200 bg-white hover:border-gray-300"
+          )}
+          aria-label={`Filter by ${label}`}
+        >
+          <option value="">{placeholder}</option>
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+
+        {has ? (
           <button
             type="button"
-            onClick={() => onChange({ target: { name: "search", value: "" } })}
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-200 rounded-full transition-colors"
-            aria-label="Clear search"
+            onClick={() => onChange("")}
+            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl p-2 text-gray-500 hover:bg-gray-100"
+            aria-label={`Clear ${label}`}
           >
-            <FiX className="w-4 h-4 text-gray-500" />
+            <FiX className="h-4 w-4" />
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );
-};
+});
 
-/**
- * Active Filter Badge
- */
-const ActiveFilterBadge = ({ label, onRemove }) => (
-  <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-100 text-blue-700 text-xs font-bold rounded-lg border-2 border-blue-200">
-    {label}
-    <button
-      type="button"
-      onClick={onRemove}
-      className="hover:bg-blue-200 rounded-full p-0.5 transition-colors"
-      aria-label={`Remove ${label} filter`}
-    >
-      <FiX className="w-3 h-3" />
-    </button>
-  </span>
-);
+const SearchField = memo(function SearchField({
+  value,
+  onChange,
+  placeholder = "Search by title, description…",
+}) {
+  const has = Boolean(value?.trim());
 
-// ================================================================
-// 🚀 MAIN COMPONENT
-// ================================================================
-
-const ComplaintFilters = ({ filters, setFilters, className = "" }) => {
-  // ============================================================
-  // COMPUTED VALUES
-  // ============================================================
-
-  const activeFilterCount = useMemo(
-    () => countActiveFilters(filters),
-    [filters]
+  return (
+    <div>
+      <FieldLabel htmlFor="complaint-search">Search</FieldLabel>
+      <div className="relative">
+        <FiSearch className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+        <input
+          id="complaint-search"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className={cx(
+            "w-full rounded-2xl border-2 py-3 pl-12 pr-12 text-sm font-semibold outline-none transition",
+            "focus:border-blue-500 focus:ring-4 focus:ring-blue-100",
+            has
+              ? "border-blue-400 bg-blue-50/50"
+              : "border-gray-200 bg-white hover:border-gray-300"
+          )}
+          type="search"
+          aria-label="Search complaints"
+          autoComplete="off"
+        />
+        {has ? (
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl p-2 text-gray-500 hover:bg-gray-100"
+            aria-label="Clear search"
+          >
+            <FiX className="h-4 w-4" />
+          </button>
+        ) : null}
+      </div>
+    </div>
   );
+});
+
+function ComplaintFilters({
+  value,
+  onChange,
+  className = "",
+  debounceMs = 350,
+  showActiveChips = true,
+  defaultOpen = true,
+  open, // optional controlled
+  onOpenChange, // optional controlled
+}) {
+  const activeCount = useMemo(() => countActive(value), [value]);
 
   const statusOptions = useMemo(
-    () =>
-      Object.values(COMPLAINT_STATUS).map((status) => ({
-        value: status,
-        label: STATUS_LABELS[status],
-      })),
+    () => buildOptions(COMPLAINT_STATUS, STATUS_LABELS),
     []
   );
-
   const categoryOptions = useMemo(
-    () =>
-      Object.values(COMPLAINT_CATEGORY).map((category) => ({
-        value: category,
-        label: CATEGORY_LABELS[category],
-      })),
+    () => buildOptions(COMPLAINT_CATEGORY, CATEGORY_LABELS),
     []
   );
-
   const priorityOptions = useMemo(
-    () =>
-      Object.values(COMPLAINT_PRIORITY).map((priority) => ({
-        value: priority,
-        label: PRIORITY_LABELS[priority],
-      })),
+    () => buildOptions(COMPLAINT_PRIORITY, PRIORITY_LABELS),
     []
   );
 
-  // ============================================================
-  // HANDLERS
-  // ============================================================
+  const isControlled = typeof open === "boolean";
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const isOpen = isControlled ? open : uncontrolledOpen;
 
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFilters((prev) => ({ ...prev, [name]: value }));
+  const setOpen = (next) => {
+    if (!isControlled) setUncontrolledOpen(next);
+    onOpenChange?.(next);
   };
 
-  const resetFilters = () => {
-    setFilters({ status: "", category: "", priority: "", search: "" });
-  };
+  const clearAll = () =>
+    onChange({ search: "", status: "", category: "", priority: "" });
 
-  const removeFilter = (filterName) => {
-    setFilters((prev) => ({ ...prev, [filterName]: "" }));
-  };
+  // Debounced search
+  const [searchDraft, setSearchDraft] = useState(value.search || "");
+  const first = useRef(true);
 
-  // ============================================================
-  // RENDER
-  // ============================================================
+  useEffect(() => {
+    if (first.current) return;
+    setSearchDraft(value.search || "");
+  }, [value.search]);
+
+  useEffect(() => {
+    first.current = false;
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if ((value.search || "") !== searchDraft)
+        onChange({ ...value, search: searchDraft });
+    }, debounceMs);
+    return () => clearTimeout(t);
+  }, [searchDraft, debounceMs, onChange, value]);
+
+  const set = (key) => (next) => onChange({ ...value, [key]: next });
 
   return (
     <section
-      aria-labelledby="filter-heading"
-      className={`bg-white rounded-2xl p-6 shadow-sm border-2 border-gray-100 ${className}`}
+      aria-label="Complaint filters"
+      className={cx(
+        "rounded-3xl border border-gray-200 bg-white shadow-sm ring-1 ring-black/5",
+        className
+      )}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-blue-50 rounded-xl">
-            <FiFilter className="w-5 h-5 text-blue-600" />
+      <div className="flex flex-col gap-4 border-b border-gray-100 bg-gradient-to-b from-gray-50/80 to-white px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+        <button
+          type="button"
+          onClick={() => setOpen(!isOpen)}
+          className="flex items-center gap-3 text-left"
+          aria-expanded={isOpen}
+          aria-controls="filters-body"
+        >
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-blue-50 text-blue-700 ring-1 ring-blue-100">
+            <FiFilter className="h-5 w-5" />
           </div>
-          <div>
-            <h3
-              id="filter-heading"
-              className="text-lg font-black text-gray-900"
-            >
-              Filter Complaints
-            </h3>
-            {activeFilterCount > 0 && (
-              <p className="text-xs text-gray-500 mt-0.5">
-                {activeFilterCount} active filter
-                {activeFilterCount > 1 ? "s" : ""}
-              </p>
-            )}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-extrabold text-gray-900">Filters</h3>
+              <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-extrabold text-gray-600">
+                {activeCount}
+              </span>
+            </div>
+            <p className="mt-0.5 text-xs font-semibold text-gray-500">
+              {activeCount ? `${activeCount} active` : "No filters applied"}
+            </p>
           </div>
-        </div>
 
-        {activeFilterCount > 0 && (
+          <span className="ml-auto inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm font-extrabold text-gray-700 hover:bg-gray-50">
+            {isOpen ? "Hide" : "Show"}
+            {isOpen ? (
+              <FiChevronUp className="h-4 w-4" />
+            ) : (
+              <FiChevronDown className="h-4 w-4" />
+            )}
+          </span>
+        </button>
+
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={resetFilters}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 rounded-xl transition-colors"
-            aria-label="Reset all filters"
+            onClick={clearAll}
+            disabled={!activeCount}
+            className={cx(
+              "rounded-2xl px-4 py-2 text-sm font-extrabold transition",
+              activeCount
+                ? "bg-gray-900 text-white hover:bg-gray-800"
+                : "cursor-not-allowed bg-gray-100 text-gray-400"
+            )}
+            aria-label="Clear all filters"
           >
-            <FiX className="w-4 h-4" />
-            Reset All
+            Clear all
           </button>
-        )}
+        </div>
       </div>
 
-      {/* Filter Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        {/* Search */}
-        <SearchInput
-          value={filters.search}
-          onChange={handleChange}
-          placeholder="Search by title, description..."
-        />
+      <div id="filters-body" className={cx("px-6 py-6", !isOpen && "hidden")}>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+          <SearchField value={searchDraft} onChange={setSearchDraft} />
 
-        {/* Status */}
-        <FilterSelect
-          label="Status"
-          name="status"
-          value={filters.status}
-          options={statusOptions}
-          onChange={handleChange}
-          placeholder="All Statuses"
-        />
+          <SelectField
+            id="filter-status"
+            label="Status"
+            value={value.status}
+            options={statusOptions}
+            onChange={set("status")}
+            placeholder="All statuses"
+          />
 
-        {/* Category */}
-        <FilterSelect
-          label="Category"
-          name="category"
-          value={filters.category}
-          options={categoryOptions}
-          onChange={handleChange}
-          placeholder="All Categories"
-        />
+          <SelectField
+            id="filter-category"
+            label="Category"
+            value={value.category}
+            options={categoryOptions}
+            onChange={set("category")}
+            placeholder="All categories"
+          />
 
-        {/* Priority */}
-        <FilterSelect
-          label="Priority"
-          name="priority"
-          value={filters.priority}
-          options={priorityOptions}
-          onChange={handleChange}
-          placeholder="All Priorities"
-        />
-      </div>
+          <SelectField
+            id="filter-priority"
+            label="Priority"
+            value={value.priority}
+            options={priorityOptions}
+            onChange={set("priority")}
+            placeholder="All priorities"
+          />
+        </div>
 
-      {/* Active Filters Display */}
-      {activeFilterCount > 0 && (
-        <div className="mt-6 pt-6 border-t-2 border-gray-100">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-gray-600 uppercase tracking-wider">
-              Active Filters:
-            </span>
-            <div className="flex flex-wrap gap-2">
-              {filters.search && (
-                <ActiveFilterBadge
-                  label={`Search: "${filters.search}"`}
-                  onRemove={() => removeFilter("search")}
-                />
-              )}
-              {filters.status && (
-                <ActiveFilterBadge
-                  label={`Status: ${STATUS_LABELS[filters.status]}`}
-                  onRemove={() => removeFilter("status")}
-                />
-              )}
-              {filters.category && (
-                <ActiveFilterBadge
-                  label={`Category: ${CATEGORY_LABELS[filters.category]}`}
-                  onRemove={() => removeFilter("category")}
-                />
-              )}
-              {filters.priority && (
-                <ActiveFilterBadge
-                  label={`Priority: ${PRIORITY_LABELS[filters.priority]}`}
-                  onRemove={() => removeFilter("priority")}
-                />
-              )}
+        {showActiveChips && activeCount ? (
+          <div className="mt-6 border-t border-gray-100 pt-5">
+            <div className="flex flex-wrap items-center gap-2">
+              {value.search?.trim() ? (
+                <Chip onRemove={() => onChange({ ...value, search: "" })}>
+                  Search: “{value.search.trim()}”
+                </Chip>
+              ) : null}
+
+              {value.status ? (
+                <Chip onRemove={() => onChange({ ...value, status: "" })}>
+                  Status: {STATUS_LABELS?.[value.status] || value.status}
+                </Chip>
+              ) : null}
+
+              {value.category ? (
+                <Chip onRemove={() => onChange({ ...value, category: "" })}>
+                  Category:{" "}
+                  {CATEGORY_LABELS?.[value.category] || value.category}
+                </Chip>
+              ) : null}
+
+              {value.priority ? (
+                <Chip onRemove={() => onChange({ ...value, priority: "" })}>
+                  Priority:{" "}
+                  {PRIORITY_LABELS?.[value.priority] || value.priority}
+                </Chip>
+              ) : null}
             </div>
           </div>
-        </div>
-      )}
+        ) : null}
+      </div>
     </section>
   );
-};
+}
 
-export default ComplaintFilters;
-
-/**
- * ================================================================
- * 📖 USAGE EXAMPLE
- * ================================================================
- *
- * import ComplaintFilters from './ComplaintFilters';
- *
- * const ComplaintsPage = () => {
- *   const [filters, setFilters] = useState({
- *     search: '',
- *     status: '',
- *     category: '',
- *     priority: '',
- *   });
- *
- *   return (
- *     <ComplaintFilters
- *       filters={filters}
- *       setFilters={setFilters}
- *     />
- *   );
- * };
- * ================================================================
- */
+export default memo(ComplaintFilters);

@@ -1,266 +1,312 @@
-// src/pages/admin/AdminLayout.jsx
-import React, { useState } from "react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
-  Menu,
-  X,
   LayoutDashboard,
   Users,
   FileWarning,
   BarChart2,
   Settings,
-  ChevronLeft,
-  ChevronRight,
+  Shield,
   LogOut,
+  Menu,
+  X,
+  ChevronLeft,
+  ShieldUser,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 
-// Define navigation items outside the component to prevent re-creation on render
+// --- Configuration ---
 const NAV_ITEMS = [
-  {
-    label: "Dashboard",
-    to: "/admin",
-    icon: LayoutDashboard,
-    subtitle: "Overview of activity",
-  },
-  {
-    label: "Users",
-    to: "/admin/users",
-    icon: Users,
-    subtitle: "Manage system users",
-  },
-  {
-    label: "Complaints",
-    to: "/admin/complaints",
-    icon: FileWarning,
-    subtitle: "Track and resolve issues",
-  },
-  {
-    label: "Reports",
-    to: "/admin/reports",
-    icon: BarChart2,
-    subtitle: "Analytics & insights",
-  },
-  {
-    label: "Settings",
-    to: "/admin/settings",
-    icon: Settings,
-    subtitle: "Configure admin panel",
-  },
+  { label: "Dashboard", to: "/admin", icon: LayoutDashboard, end: true },
+  { label: "Users", to: "/admin/users", icon: Users },
+  { label: "Complaints", to: "/admin/complaints", icon: FileWarning },
+  { label: "Reports", to: "/admin/reports", icon: BarChart2 },
+  { label: "Roles", to: "/admin/roles", icon: Shield },
+  { label: "Settings", to: "/admin/settings", icon: Settings },
 ];
 
-/**
- * Sub-component for rendering Sidebar Links
- * Handles active state styling and collapsed view logic
- */
-const SidebarLink = ({ item, isCollapsed, currentPath, onClick }) => {
+const SIDEBAR_WIDTH = { expanded: 210, collapsed: 64 }; // px
+
+// --- Utility: Class Name Helper ---
+const cn = (...classes) => classes.filter(Boolean).join(" ");
+
+// --- Hook: LocalStorage ---
+function useLocalStorageState(key, initialValue) {
+  const [value, setValue] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem(key, JSON.stringify(value));
+  }, [key, value]);
+
+  return [value, setValue];
+}
+
+// --- Component: Sidebar Item ---
+// Handles the logic for showing/hiding text based on collapsed state
+const SidebarItem = ({ item, collapsed, onClick }) => {
   const Icon = item.icon;
-
-  // Exact match for root, startsWith for sub-routes
-  const isActive =
-    item.to === "/admin"
-      ? currentPath === "/admin"
-      : currentPath.startsWith(item.to);
-
-  const baseClasses =
-    "group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-all duration-200";
-  const activeClasses = isActive
-    ? "bg-blue-50 text-blue-700 shadow-sm"
-    : "text-slate-700 hover:bg-slate-100";
 
   return (
     <NavLink
       to={item.to}
-      end={item.to === "/admin"}
+      end={item.end}
       onClick={onClick}
-      className={`${baseClasses} ${activeClasses}`}
-      title={isCollapsed ? item.label : ""}
-    >
-      <span
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors ${
+      className={({ isActive }) =>
+        cn(
+          "group relative flex items-center rounded-xl px-3 py-2 mx-2 my-0.5",
+          "transition-all duration-300 ease-in-out",
           isActive
-            ? "bg-blue-100 text-blue-700"
-            : "bg-slate-100 text-slate-600 group-hover:bg-white"
-        }`}
-      >
-        <Icon className="h-4 w-4" />
-      </span>
+            ? "bg-indigo-600 text-white shadow-md shadow-indigo-200"
+            : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+        )
+      }
+    >
+      {/* Icon Wrapper - Always centered if collapsed */}
+      <div className="flex items-center justify-center min-w-[24px]">
+        <Icon size={20} />
+      </div>
 
-      {!isCollapsed && (
-        <div className="flex min-w-0 flex-col animate-in fade-in slide-in-from-left-2 duration-200">
-          <span className="truncate">{item.label}</span>
-          <span className="truncate text-[11px] font-normal text-slate-500">
-            {item.subtitle}
-          </span>
+      {/* Text Label - Animates width to 0 when collapsed */}
+      <div
+        className={cn(
+          "overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
+          collapsed
+            ? "w-0 opacity-0 translate-x-4"
+            : "w-auto opacity-100 ml-3 translate-x-0"
+        )}
+      >
+        <span className="text-sm font-semibold">{item.label}</span>
+      </div>
+
+      {/* Hover Tooltip (Only visible when collapsed) */}
+      {collapsed && (
+        <div className="absolute left-full ml-4 hidden group-hover:block z-50">
+          <div className="bg-slate-900 text-white text-xs font-medium px-2 py-1 rounded shadow-lg whitespace-nowrap">
+            {item.label}
+          </div>
         </div>
       )}
     </NavLink>
   );
 };
 
-export default function AdminLayout({ children }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+// --- Component: Sidebar Content (Logo + Nav + Footer) ---
+const SidebarContent = ({
+  collapsed,
+  setCollapsed,
+  onLogout,
+  mobile = false,
+}) => {
+  return (
+    <div className="flex h-full flex-col bg-white border-r border-slate-200">
+      {/* Brand Header */}
+      <div
+        className={cn(
+          "flex h-16 items-center px-4 transition-all duration-300",
+          collapsed ? "justify-center" : "justify-start"
+        )}
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm shadow-indigo-200">
+            <ShieldUser size={20} />
+          </div>
 
-  const location = useLocation();
+          <div
+            className={cn(
+              "flex flex-col overflow-hidden transition-all duration-300",
+              collapsed ? "w-0 opacity-0" : "w-32 opacity-100"
+            )}
+          >
+            <span className="text-sm font-extrabold text-slate-900 leading-none">
+              ADMIN
+            </span>
+            <span className="text-[10px] font-bold tracking-widest text-slate-400 uppercase mt-1">
+              Console
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Navigation List */}
+      <nav className="flex-1 py-4">
+        {NAV_ITEMS.map((item) => (
+          <SidebarItem
+            key={item.to}
+            item={item}
+            collapsed={collapsed}
+            onClick={mobile ? () => setCollapsed(false) : undefined}
+          />
+        ))}
+      </nav>
+
+      {/* Footer / Logout */}
+      <div className="border-t border-slate-100 p-3 mb-20">
+        <button
+          onClick={onLogout}
+          className="flex w-full items-center rounded-xl px-3 py-3 text-red-600 hover:bg-red-50 transition-colors group relative"
+        >
+          <div className="flex items-center justify-center min-w-[24px]">
+            <LogOut size={20} />
+          </div>
+          <div
+            className={cn(
+              "overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
+              collapsed ? "w-0 opacity-0" : "w-auto opacity-100 ml-3"
+            )}
+          >
+            <span className="text-sm font-semibold">Logout</span>
+          </div>
+          {/* Logout Tooltip */}
+          {collapsed && (
+            <div className="absolute left-full ml-4 hidden group-hover:block z-50">
+              <div className="bg-red-900 text-white text-xs font-medium px-2 py-1 rounded shadow-lg whitespace-nowrap">
+                Logout
+              </div>
+            </div>
+          )}
+        </button>
+
+        {/* Toggle Button (Desktop Only) */}
+        {!mobile && (
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            className="mt-2 flex w-full items-center justify-center rounded-lg py-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+          >
+            <ChevronLeft
+              size={20}
+              className={cn(
+                "transition-transform duration-300",
+                collapsed && "rotate-180"
+              )}
+            />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// --- Main Layout Component ---
+export default function AdminLayout() {
+  const [collapsed, setCollapsed] = useLocalStorageState(
+    "admin_sidebar_collapsed",
+    false
+  );
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const { logout } = useAuth();
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const location = useLocation();
 
-  const displayName = user?.name || "Admin";
-  const roleLabel = user?.role ? user.role.toUpperCase() : "ADMIN";
-
-  const handleLogout = async () => {
+  // Handlers
+  const handleLogout = useCallback(async () => {
     try {
       await logout();
       navigate("/login", { replace: true });
     } catch (error) {
-      // Handle error implicitly or show toast
+      console.error("Logout failed", error);
     }
-  };
+  }, [logout, navigate]);
+
+  // Close mobile drawer on route change
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
-      {/* Mobile Overlay */}
-      {sidebarOpen && (
-        <div
-          role="presentation"
-          className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm md:hidden"
-          onClick={() => setSidebarOpen(false)}
-          aria-hidden="true"
-        />
-      )}
+    <div className="min-h-screen bg-slate-50">
+      {/* --- Mobile Header --- */}
+      <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-slate-200 bg-white/80 px-4 backdrop-blur md:hidden">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setMobileOpen(true)}
+            className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
+          >
+            <Menu size={20} />
+          </button>
+          <span className="font-bold text-slate-900">Admin Console</span>
+        </div>
+      </header>
 
-      {/* Sidebar */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-slate-200 bg-white transition-all duration-300 ease-in-out
-          ${sidebarCollapsed ? "w-20" : "w-64"}
-          ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
-          md:translate-x-0 md:static`}
-        aria-label="Sidebar"
+      {/* ✅ Mobile Main Content (was missing) */}
+      <main className="md:hidden min-w-0 p-4 sm:p-6">
+        <div className="mx-auto max-w-7xl">
+          <Outlet />
+        </div>
+      </main>
+
+      {/* --- Desktop Layout Grid --- */}
+      <div
+        className="hidden md:grid min-h-screen transition-all duration-300 ease-in-out"
+        style={{
+          gridTemplateColumns: collapsed
+            ? `${SIDEBAR_WIDTH.collapsed}px 1fr`
+            : `${SIDEBAR_WIDTH.expanded}px 1fr`,
+        }}
       >
-        {/* Sidebar Header */}
-        <div className="flex h-16 items-center justify-between border-b border-slate-200 px-4">
-          <div className="flex items-center gap-2 overflow-hidden">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white text-lg font-bold">
-              A
-            </div>
-            {!sidebarCollapsed && (
-              <div className="flex flex-col min-w-0 transition-opacity duration-200">
-                <span className="text-sm font-semibold tracking-tight text-slate-900 truncate">
-                  Admin Panel
-                </span>
-                <span className="text-[11px] text-slate-500 truncate">
-                  {roleLabel}
-                </span>
-              </div>
-            )}
+        {/* Desktop Sidebar */}
+        <aside className="sticky top-0 h-screen">
+          <SidebarContent
+            collapsed={collapsed}
+            setCollapsed={setCollapsed}
+            onLogout={handleLogout}
+          />
+        </aside>
+
+        {/* Main Content Area */}
+        <main className="min-w-0 p-8">
+          <div className="mx-auto max-w-7xl animate-in fade-in zoom-in-95 duration-300">
+            <Outlet />
           </div>
+        </main>
+      </div>
 
-          <div className="flex items-center gap-1">
-            {/* Desktop Collapse Toggle */}
-            <button
-              type="button"
-              onClick={() => setSidebarCollapsed((prev) => !prev)}
-              className="hidden h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 md:flex"
-              aria-label={
-                sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
-              }
-            >
-              {sidebarCollapsed ? (
-                <ChevronRight size={16} />
-              ) : (
-                <ChevronLeft size={16} />
-              )}
-            </button>
+      {/* --- Mobile Sidebar Overlay --- */}
+      {/* Wrapper */}
+      <div
+        className={cn(
+          "relative z-50 md:hidden",
+          mobileOpen ? "block" : "hidden"
+        )}
+      >
+        {/* Backdrop */}
+        <div
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity"
+          onClick={() => setMobileOpen(false)}
+        />
 
-            {/* Mobile Close Button */}
+        {/* Drawer */}
+        <div
+          className={cn(
+            "fixed inset-y-0 left-0 w-[80%] max-w-xs bg-white shadow-2xl transition-transform duration-300 ease-out",
+            mobileOpen ? "translate-x-0" : "-translate-x-full"
+          )}
+        >
+          {/* Close Button inside Drawer */}
+          <div className="absolute right-4 top-4">
             <button
-              type="button"
-              onClick={() => setSidebarOpen(false)}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:text-slate-900 md:hidden"
-              aria-label="Close sidebar"
+              onClick={() => setMobileOpen(false)}
+              className="p-1 text-slate-400 hover:text-slate-600"
             >
               <X size={20} />
             </button>
           </div>
+
+          <SidebarContent
+            collapsed={false} // Always expanded on mobile
+            setCollapsed={() => setMobileOpen(false)}
+            onLogout={handleLogout}
+            mobile={true}
+          />
         </div>
-
-        {/* Navigation Links */}
-        <nav className="flex-1 overflow-y-auto px-2 py-4 flex flex-col gap-1 scrollbar-thin scrollbar-thumb-slate-200">
-          {NAV_ITEMS.map((item) => (
-            <SidebarLink
-              key={item.to}
-              item={item}
-              isCollapsed={sidebarCollapsed}
-              currentPath={location.pathname}
-              onClick={() => setSidebarOpen(false)} // Close sidebar on mobile when clicked
-            />
-          ))}
-        </nav>
-
-        {/* Footer / User Profile */}
-        <div className="border-t border-slate-200 p-3">
-          <div
-            className={`flex items-center gap-3 mb-3 ${sidebarCollapsed ? "justify-center" : ""}`}
-          >
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white font-bold text-sm">
-              {displayName.charAt(0).toUpperCase()}
-            </div>
-            {!sidebarCollapsed && (
-              <div className="flex-1 min-w-0 overflow-hidden">
-                <p
-                  className="text-sm font-semibold text-slate-900 truncate"
-                  title={displayName}
-                >
-                  {displayName}
-                </p>
-                <p
-                  className="text-xs text-slate-500 truncate"
-                  title={user?.email}
-                >
-                  {user?.email}
-                </p>
-              </div>
-            )}
-          </div>
-
-          <button
-            onClick={handleLogout}
-            className="group w-full flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-            title="Sign out"
-          >
-            <LogOut size={18} />
-            {!sidebarCollapsed && <span>Logout</span>}
-          </button>
-        </div>
-      </aside>
-
-      {/* Main Content Area */}
-      <main className="flex-1 w-full min-w-0 overflow-auto bg-slate-50 flex flex-col h-screen">
-        {/* Mobile Header (Hamburger) */}
-        <div className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 md:hidden">
-          <button
-            type="button"
-            className="flex h-10 w-10 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open sidebar"
-          >
-            <Menu size={24} />
-          </button>
-          <span className="text-lg font-bold text-slate-900">Admin Panel</span>
-          <div className="w-10" aria-hidden="true" />{" "}
-          {/* Spacer for alignment */}
-        </div>
-
-        {/* Page Content */}
-        <div className="flex-1">
-          {children || (
-            <div className="flex h-full items-center justify-center text-slate-400">
-              <p>No content available</p>
-            </div>
-          )}
-        </div>
-      </main>
+      </div>
     </div>
   );
 }

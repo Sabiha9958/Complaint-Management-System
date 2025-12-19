@@ -1,348 +1,314 @@
-/**
- * ================================================================
- * 🎴 COMPLAINT CARD COMPONENT
- * ================================================================
- * Compact complaint card with:
- * - Status and priority badges
- * - Hover effects
- * - Truncated text with line clamps
- * - Responsive design
- * - Accessibility features
- * ================================================================
- */
-
-import React, { useMemo } from "react";
-import { Link } from "react-router-dom";
+import React, { memo, useMemo, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   FiClock,
-  FiUser,
-  FiTag,
   FiHash,
-  FiAlertCircle,
-  FiCheckCircle,
+  FiTag,
   FiFlag,
+  FiCheckCircle,
   FiMessageSquare,
+  FiAlertCircle,
+  FiEdit3,
 } from "react-icons/fi";
 import {
-  COMPLAINT_STATUS,
-  COMPLAINT_PRIORITY,
-  STATUS_LABELS,
-  STATUS_STYLES,
-  PRIORITY_LABELS,
-  PRIORITY_STYLES,
   CATEGORY_LABELS,
-  getStatusStyle,
+  PRIORITY_LABELS,
+  STATUS_LABELS,
   getPriorityStyle,
+  getStatusStyle,
 } from "../../utils/constants";
 
-// ================================================================
-// 🛠️ UTILITY FUNCTIONS
-// ================================================================
+const cx = (...c) => c.filter(Boolean).join(" ");
 
-/**
- * Format date to readable string
- */
-const formatDate = (dateStr) => {
-  if (!dateStr) return "N/A";
-
-  try {
-    return new Date(dateStr).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch (error) {
-    return "Invalid Date";
-  }
+const safeStr = (v, fallback = "—") =>
+  v == null || v === "" ? fallback : String(v);
+const clamp = (text, max = 120) => {
+  const s = String(text || "").trim();
+  return s.length > max ? `${s.slice(0, max).trim()}…` : s;
 };
 
-/**
- * Format relative time (e.g., "2 hours ago")
- */
-const formatRelativeTime = (dateStr) => {
-  if (!dateStr) return "";
-
-  try {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
-
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-
-    return formatDate(dateStr);
-  } catch (error) {
-    return "";
-  }
+const formatDateShort = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 };
 
-/**
- * Truncate text with ellipsis
- */
-const truncate = (text, maxLength = 100) => {
-  if (!text) return "";
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength).trim()}...`;
+const formatRelative = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const diff = Date.now() - d.getTime();
+  const m = Math.floor(diff / 60000);
+  const h = Math.floor(m / 60);
+  const days = Math.floor(h / 24);
+  if (m < 1) return "Just now";
+  if (m < 60) return `${m}m ago`;
+  if (h < 24) return `${h}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return formatDateShort(iso);
 };
 
-/**
- * Get initials from name
- */
-const getInitials = (name) => {
-  if (!name) return "?";
-  return name
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+const initials = (name) => {
+  const s = String(name || "").trim();
+  if (!s) return "?";
+  return s
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase())
+    .join("");
 };
 
-// ================================================================
-// 🎨 SUB-COMPONENTS
-// ================================================================
+const Badge = ({ children, className = "" }) => (
+  <span
+    className={cx(
+      "inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider",
+      className
+    )}
+  >
+    {children}
+  </span>
+);
 
-/**
- * Status Badge Component
- */
 const StatusBadge = ({ status }) => {
   const style = getStatusStyle(status);
-  const label = STATUS_LABELS[status] || status;
+  const label = STATUS_LABELS?.[status] || safeStr(status, "Pending");
+  const dot = style?.text ? style.text.replace("text-", "bg-") : "bg-gray-400";
 
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border-2 ${style.bg} ${style.text} ${style.border}`}
-    >
-      <div
-        className={`w-1.5 h-1.5 rounded-full ${style.text.replace("text-", "bg-")}`}
-      />
+    <Badge className={cx("border-2", style?.bg, style?.text, style?.border)}>
+      <span className={cx("h-1.5 w-1.5 rounded-full", dot)} />
       {label}
-    </span>
+    </Badge>
   );
 };
 
-/**
- * Priority Badge Component
- */
 const PriorityBadge = ({ priority }) => {
   const style = getPriorityStyle(priority);
-  const label = PRIORITY_LABELS[priority] || priority;
+  const label = PRIORITY_LABELS?.[priority] || safeStr(priority, "Low");
 
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border-2 ${style.bg} ${style.text} ${style.border}`}
-    >
-      <FiFlag className="w-2.5 h-2.5" />
+    <Badge className={cx("border-2", style?.bg, style?.text, style?.border)}>
+      <FiFlag className="h-3 w-3" />
       {label}
-    </span>
+    </Badge>
   );
 };
 
-/**
- * Category Badge Component
- */
 const CategoryBadge = ({ category }) => {
-  const label = CATEGORY_LABELS[category] || category;
-
+  const label = CATEGORY_LABELS?.[category] || safeStr(category);
   return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-gray-100 text-gray-700 border-2 border-gray-200">
-      <FiTag className="w-2.5 h-2.5" />
+    <Badge className="border-2 border-gray-200 bg-gray-100 text-gray-700">
+      <FiTag className="h-3 w-3" />
       {label}
-    </span>
+    </Badge>
   );
 };
 
-/**
- * User Avatar Component
- */
-const UserAvatar = ({ name, size = "sm" }) => {
-  const sizes = {
-    sm: "w-7 h-7 text-xs",
-    md: "w-9 h-9 text-sm",
-  };
-
-  const initials = getInitials(name);
-
-  return (
-    <div
-      className={`${sizes[size]} rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-black shadow-sm`}
-      title={name}
-    >
-      {initials}
-    </div>
-  );
-};
-
-/**
- * Empty State Component
- */
-const EmptyCard = () => (
-  <div className="h-full bg-gray-50 rounded-xl border-2 border-dashed border-gray-300 p-8 flex flex-col items-center justify-center text-center">
-    <FiAlertCircle className="w-10 h-10 text-gray-400 mb-2" />
-    <p className="text-sm text-gray-500 font-medium">Data unavailable</p>
+const Avatar = ({ name }) => (
+  <div
+    className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-600 to-blue-500 text-xs font-black text-white shadow-sm ring-1 ring-black/5"
+    title={safeStr(name, "User")}
+  >
+    {initials(name)}
   </div>
 );
 
-// ================================================================
-// 🚀 MAIN COMPONENT
-// ================================================================
+const EmptyCard = memo(function EmptyCard() {
+  return (
+    <div className="flex h-full min-h-[220px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-300 bg-gray-50 p-8 text-center">
+      <FiAlertCircle className="mb-2 h-9 w-9 text-gray-400" />
+      <p className="text-sm font-semibold text-gray-600">No data</p>
+      <p className="mt-1 text-xs text-gray-500">
+        Complaint information unavailable.
+      </p>
+    </div>
+  );
+});
 
-const ComplaintCard = ({ complaint }) => {
-  // ============================================================
-  // COMPUTED VALUES
-  // ============================================================
+const ComplaintCard = memo(function ComplaintCard({
+  complaint,
+  to, // (complaint) => string OR string
+  onUpdateStatus, // (complaint) => void
+  canUpdateStatus = false, // pass from parent based on role
+}) {
+  const navigate = useNavigate();
 
-  const complaintId = useMemo(
-    () => complaint?.complaintId?.slice(-8).toUpperCase() || "N/A",
-    [complaint?.complaintId]
+  const href = useMemo(() => {
+    if (to) return typeof to === "function" ? to(complaint) : to;
+    return complaint?._id ? `/complaints/${complaint._id}` : "#";
+  }, [complaint, to]);
+
+  const ui = useMemo(() => {
+    if (!complaint) return null;
+
+    const id = complaint._id || complaint.complaintId;
+    const shortId = id ? String(id).slice(-8).toUpperCase() : "—";
+
+    const title = safeStr(complaint.title, "Untitled complaint");
+    const description =
+      clamp(complaint.description, 120) || "No description provided.";
+    const createdAt = complaint.createdAt || null;
+
+    const name =
+      complaint.contactInfo?.name ||
+      complaint.user?.name ||
+      complaint.createdBy?.name ||
+      "Anonymous";
+
+    const email =
+      complaint.contactInfo?.email ||
+      complaint.user?.email ||
+      complaint.createdBy?.email ||
+      "";
+
+    const assigned = Boolean(complaint.assignedTo);
+    const commentsCount = Number(complaint.commentsCount || 0);
+
+    return {
+      shortId,
+      title,
+      description,
+      createdAt,
+      name,
+      email,
+      assigned,
+      commentsCount,
+    };
+  }, [complaint]);
+
+  const onCardClick = useCallback(() => {
+    if (href && href !== "#") navigate(href);
+  }, [href, navigate]);
+
+  const onStatusClick = useCallback(
+    (e) => {
+      e.preventDefault();
+      e.stopPropagation(); // prevent navigation from card click
+      onUpdateStatus?.(complaint);
+    },
+    [onUpdateStatus, complaint]
   );
 
-  const formattedDate = useMemo(
-    () => formatDate(complaint?.createdAt),
-    [complaint?.createdAt]
-  );
-
-  const relativeTime = useMemo(
-    () => formatRelativeTime(complaint?.createdAt),
-    [complaint?.createdAt]
-  );
-
-  const truncatedDescription = useMemo(
-    () => truncate(complaint?.description, 120),
-    [complaint?.description]
-  );
-
-  // ============================================================
-  // RENDER
-  // ============================================================
-
-  // Early return for missing data
-  if (!complaint) {
-    return <EmptyCard />;
-  }
+  if (!complaint || !ui) return <EmptyCard />;
 
   return (
-    <Link
-      to={`/complaint/${complaint._id}`}
-      className="group block h-full focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-200 rounded-2xl"
-      aria-label={`View complaint: ${complaint.title}`}
+    <article
+      role="button"
+      tabIndex={0}
+      onClick={onCardClick}
+      onKeyDown={(e) =>
+        e.key === "Enter" || e.key === " " ? onCardClick() : null
+      }
+      className={cx(
+        "relative h-full overflow-hidden rounded-2xl border-2 border-gray-100 bg-white p-5 shadow-sm",
+        "transition-all duration-300 hover:-translate-y-1 hover:border-blue-300 hover:shadow-xl active:translate-y-0",
+        "focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
+      )}
+      aria-label={`Open complaint: ${ui.title}`}
     >
-      <article className="bg-white rounded-2xl p-5 h-full flex flex-col border-2 border-gray-100 shadow-sm transition-all duration-300 hover:shadow-xl hover:border-blue-300 hover:-translate-y-1 active:translate-y-0">
-        {/* ============================================ */}
-        {/* HEADER: ID and Date */}
-        {/* ============================================ */}
-        <div className="flex items-center justify-between mb-4">
-          {/* Complaint ID */}
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg border border-gray-200">
-            <FiHash className="w-3 h-3 text-gray-500" />
-            <span className="text-xs font-mono font-bold text-gray-700">
-              {complaintId}
+      <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 hover:opacity-100">
+        <div className="absolute -top-24 -right-24 h-48 w-48 rounded-full bg-blue-200/40 blur-3xl" />
+        <div className="absolute -bottom-24 -left-24 h-48 w-48 rounded-full bg-indigo-200/30 blur-3xl" />
+      </div>
+
+      <div className="relative">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-1.5">
+            <FiHash className="h-3.5 w-3.5 text-gray-500" />
+            <span className="text-xs font-black text-gray-700">
+              {ui.shortId}
             </span>
           </div>
 
-          {/* Date */}
-          <div className="flex items-center gap-1.5 text-xs text-gray-500">
-            <FiClock className="w-3 h-3" />
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <FiClock className="h-3.5 w-3.5" />
             <time
-              dateTime={complaint.createdAt}
-              title={formattedDate}
-              className="font-medium"
+              dateTime={ui.createdAt || undefined}
+              title={formatDateShort(ui.createdAt)}
+              className="font-semibold"
             >
-              {relativeTime}
+              {formatRelative(ui.createdAt)}
             </time>
           </div>
         </div>
 
-        {/* ============================================ */}
-        {/* CONTENT: Title and Description */}
-        {/* ============================================ */}
-        <div className="flex-grow mb-4">
-          <h3 className="text-base font-black text-gray-900 mb-2 leading-tight line-clamp-2 group-hover:text-blue-600 transition-colors">
-            {complaint.title || "Untitled Complaint"}
+        <div className="mb-4">
+          <h3 className="mb-2 line-clamp-2 text-base font-black leading-tight text-gray-900">
+            {ui.title}
           </h3>
-          <p className="text-sm text-gray-600 line-clamp-2 leading-relaxed">
-            {truncatedDescription || "No description provided."}
+          <p className="line-clamp-2 text-sm leading-relaxed text-gray-600">
+            {ui.description}
           </p>
         </div>
 
-        {/* ============================================ */}
-        {/* BADGES: Status, Priority, Category */}
-        {/* ============================================ */}
-        <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
           <StatusBadge status={complaint.status} />
           <PriorityBadge priority={complaint.priority} />
-          {complaint.category && (
+          {complaint.category ? (
             <CategoryBadge category={complaint.category} />
-          )}
+          ) : null}
+
+          {canUpdateStatus ? (
+            <button
+              type="button"
+              onClick={onStatusClick}
+              className="ml-auto inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-extrabold text-slate-700 hover:bg-slate-50"
+              aria-label="Update complaint status"
+            >
+              <FiEdit3 className="h-3.5 w-3.5" />
+              Update
+            </button>
+          ) : null}
         </div>
 
-        {/* ============================================ */}
-        {/* FOOTER: User Info and Assignment */}
-        {/* ============================================ */}
-        <div className="pt-4 border-t-2 border-gray-100 flex items-center justify-between gap-3">
-          {/* User Info */}
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <UserAvatar name={complaint.contactInfo?.name} />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold text-gray-700 truncate">
-                {complaint.contactInfo?.name || "Anonymous"}
+        <div className="flex items-center justify-between gap-3 border-t-2 border-gray-100 pt-4">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Avatar name={ui.name} />
+            <div className="min-w-0">
+              <p className="truncate text-xs font-black text-gray-800">
+                {ui.name}
               </p>
-              {complaint.contactInfo?.email && (
-                <p className="text-[10px] text-gray-500 truncate">
-                  {complaint.contactInfo.email}
+              {ui.email ? (
+                <p className="truncate text-[11px] font-medium text-gray-500">
+                  {ui.email}
                 </p>
-              )}
+              ) : null}
             </div>
           </div>
 
-          {/* Assignment Badge */}
-          {complaint.assignedTo && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-green-50 text-green-700 rounded-lg border border-green-200 shrink-0">
-              <FiCheckCircle className="w-3 h-3" />
+          {ui.assigned ? (
+            <div className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-700">
+              <FiCheckCircle className="h-3.5 w-3.5" />
               <span className="text-[10px] font-black uppercase tracking-wider">
                 Assigned
+              </span>
+            </div>
+          ) : (
+            <div className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-1 text-gray-600">
+              <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+              <span className="text-[10px] font-black uppercase tracking-wider">
+                Unassigned
               </span>
             </div>
           )}
         </div>
 
-        {/* ============================================ */}
-        {/* OPTIONAL: Comment Count */}
-        {/* ============================================ */}
-        {complaint.commentsCount > 0 && (
-          <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-2 text-xs text-gray-500">
-            <FiMessageSquare className="w-3 h-3" />
-            <span className="font-medium">
-              {complaint.commentsCount} comment
-              {complaint.commentsCount > 1 ? "s" : ""}
+        {ui.commentsCount > 0 ? (
+          <div className="mt-3 flex items-center gap-2 border-t border-gray-100 pt-3 text-xs text-gray-500">
+            <FiMessageSquare className="h-3.5 w-3.5" />
+            <span className="font-semibold">
+              {ui.commentsCount} comment{ui.commentsCount > 1 ? "s" : ""}
             </span>
           </div>
-        )}
-      </article>
-    </Link>
+        ) : null}
+      </div>
+    </article>
   );
-};
+});
 
 export default ComplaintCard;
-
-/**
- * ================================================================
- * 📖 USAGE EXAMPLE
- * ================================================================
- *
- * import ComplaintCard from './ComplaintCard';
- *
- * const ComplaintsList = ({ complaints }) => (
- *   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
- *     {complaints.map((complaint) => (
- *       <ComplaintCard key={complaint._id} complaint={complaint} />
- *     ))}
- *   </div>
- * );
- * ================================================================
- */

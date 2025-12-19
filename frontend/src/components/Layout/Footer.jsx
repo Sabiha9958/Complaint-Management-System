@@ -1,319 +1,403 @@
-/**
- * ================================================================
- * 🦶 FOOTER COMPONENT
- * ================================================================
- * Site-wide footer with:
- * - Company information
- * - Quick navigation links
- * - Contact details
- * - Social media links
- * - Newsletter subscription
- * - Accessibility features
- * ================================================================
- */
-
-import React from "react";
+import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   FiMail,
   FiPhone,
   FiMapPin,
   FiClock,
-  FiFileText,
   FiGithub,
-  FiTwitter,
   FiLinkedin,
+  FiTwitter,
   FiInstagram,
-  FiExternalLink,
-  FiHeart,
+  FiArrowUpRight,
 } from "react-icons/fi";
+import { useAuth } from "../../context/AuthContext";
 
-// ================================================================
-// 📋 CONFIGURATION
-// ================================================================
-
-const COMPANY_INFO = {
+const BRAND = {
   name: "ComplaintMS",
-  tagline: "Efficient Complaint Management for Educational Institutions",
+  tagline: "Campus grievance support, made simple",
   description:
-    "A comprehensive complaint management system designed to streamline student grievance handling and resolution processes.",
-  email: "support@complaintms.edu",
-  phone: "+91 1234567890",
-  address: "123 College Campus, Education City, State 560001",
-  established: "2024",
+    "A centralized platform for submitting, routing, and tracking student complaints with clear ownership and updates.",
+  email: "help@complaintms.in",
+  phone: "+91 80 4123 9876",
+  addressLine1: "Innovation Block, 2nd Floor",
+  addressLine2: "Bengaluru, Karnataka 560059, India",
+  mapsUrl: "https://www.google.com/maps?q=Bengaluru%20Karnataka%20560059",
+  established: 2024,
 };
 
-const QUICK_LINKS = [
-  { path: "/", label: "Home", icon: FiFileText },
-  { path: "/submit-complaint", label: "Submit Complaint", icon: FiFileText },
-  { path: "/my-complaints", label: "My Complaints", icon: FiFileText },
-  { path: "/about", label: "About Us", icon: FiFileText },
-  { path: "/faq", label: "FAQ", icon: FiFileText },
+const HOURS = [
+  { label: "Support", value: "24/7 (Email)" },
+  { label: "Office", value: "Mon–Fri, 9:30 AM – 6:30 PM IST" },
+  { label: "Typical response", value: "Within 24–48 hours" },
 ];
 
-const LEGAL_LINKS = [
-  { path: "/privacy-policy", label: "Privacy Policy" },
-  { path: "/terms-of-service", label: "Terms of Service" },
-  { path: "/cookie-policy", label: "Cookie Policy" },
-  { path: "/accessibility", label: "Accessibility" },
-];
-
-const SOCIAL_LINKS = [
-  {
-    name: "GitHub",
-    url: "https://github.com/complaintms",
-    icon: FiGithub,
-    color: "hover:text-gray-400",
-  },
-  {
-    name: "Twitter",
-    url: "https://twitter.com/complaintms",
-    icon: FiTwitter,
-    color: "hover:text-blue-400",
-  },
+const SOCIAL = [
+  { name: "GitHub", href: "https://github.com/complaintms", Icon: FiGithub },
   {
     name: "LinkedIn",
-    url: "https://linkedin.com/company/complaintms",
-    icon: FiLinkedin,
-    color: "hover:text-blue-500",
+    href: "https://www.linkedin.com/company/complaintms",
+    Icon: FiLinkedin,
   },
+  { name: "Twitter", href: "https://twitter.com/complaintms", Icon: FiTwitter },
   {
     name: "Instagram",
-    url: "https://instagram.com/complaintms",
-    icon: FiInstagram,
-    color: "hover:text-pink-500",
+    href: "https://instagram.com/complaintms",
+    Icon: FiInstagram,
   },
 ];
 
-const HOURS = {
-  support: "24/7 Support Available",
-  responseTime: "Response within 24-48 hours",
-  office: "Mon-Fri: 9:00 AM - 6:00 PM",
-};
+const cn = (...c) => c.filter(Boolean).join(" ");
 
-// ================================================================
-// 🎨 SUB-COMPONENTS
-// ================================================================
-
-/**
- * Footer Section Component
- */
-const FooterSection = ({ title, children, className = "" }) => (
-  <div className={`space-y-4 ${className}`}>
-    <h3 className="text-lg font-black text-white tracking-tight">{title}</h3>
+const SectionTitle = ({ children }) => (
+  <h3 className="text-sm font-extrabold tracking-wide text-zinc-100">
     {children}
-  </div>
+  </h3>
 );
 
-/**
- * Contact Item Component
- */
-const ContactItem = ({ icon: Icon, label, href, external }) => (
-  <li className="group">
+const FooterSection = ({ title, children, className }) => (
+  <section className={cn("space-y-4", className)} aria-label={title}>
+    <SectionTitle>{title}</SectionTitle>
+    {children}
+  </section>
+);
+
+const FooterLink = ({ to, children }) => (
+  <Link
+    to={to}
+    className={cn(
+      "group inline-flex items-center gap-2 rounded-lg py-1 text-sm text-zinc-400 transition",
+      "hover:text-zinc-100",
+      "focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-200/40 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950",
+      "motion-reduce:transition-none"
+    )}
+  >
+    <span className="h-1.5 w-1.5 rounded-full bg-zinc-600 transition-all group-hover:w-2.5 group-hover:bg-zinc-300" />
+    {children}
+  </Link>
+);
+
+const ExternalLink = ({ href, ariaLabel, className, children }) => (
+  <a
+    href={href}
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label={ariaLabel}
+    className={cn(
+      "inline-flex items-center gap-2 rounded-lg text-sm text-zinc-400 transition",
+      "hover:text-zinc-100",
+      "focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-200/40 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950",
+      "motion-reduce:transition-none",
+      className
+    )}
+  >
+    {children}
+    <FiArrowUpRight className="h-4 w-4 opacity-70" />
+  </a>
+);
+
+const ContactRow = ({ Icon, label, href, isExternal }) => {
+  const base = cn(
+    "flex items-start gap-3 rounded-xl p-2 -m-2 text-sm text-zinc-400 transition",
+    "hover:bg-white/5 hover:text-zinc-100",
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-200/40 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950",
+    "motion-reduce:transition-none"
+  );
+
+  const content = (
+    <>
+      <span className="mt-0.5 grid h-9 w-9 place-items-center rounded-xl bg-white/5 ring-1 ring-white/10">
+        <Icon className="h-4 w-4 text-zinc-200" />
+      </span>
+      <span className="leading-relaxed">{label}</span>
+    </>
+  );
+
+  if (!href) return <div className={base}>{content}</div>;
+
+  return (
     <a
       href={href}
-      className="flex items-center gap-3 text-sm text-gray-400 hover:text-white transition-all duration-200"
-      {...(external && { target: "_blank", rel: "noopener noreferrer" })}
+      className={base}
+      {...(isExternal ? { target: "_blank", rel: "noopener noreferrer" } : {})}
     >
-      <div className="p-2 bg-gray-800 rounded-lg group-hover:bg-blue-600 transition-colors">
-        <Icon className="w-4 h-4" />
-      </div>
-      <span className="font-medium">{label}</span>
-      {external && <FiExternalLink className="w-3 h-3 opacity-50" />}
+      {content}
     </a>
-  </li>
-);
+  );
+};
 
-/**
- * Social Media Links Component
- */
-const SocialMediaLinks = () => (
-  <div className="flex items-center gap-3">
-    {SOCIAL_LINKS.map((social) => {
-      const Icon = social.icon;
-      return (
-        <a
-          key={social.name}
-          href={social.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`p-3 bg-gray-800 rounded-xl text-gray-400 ${social.color} transition-all duration-200 hover:scale-110 hover:shadow-lg`}
-          aria-label={social.name}
-        >
-          <Icon className="w-5 h-5" />
-        </a>
-      );
-    })}
-  </div>
-);
+const Newsletter = () => {
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState({ type: "idle", message: "" });
 
-/**
- * Newsletter Subscription Component (Optional)
- */
-const NewsletterSubscription = () => (
-  <div className="bg-gray-800 rounded-2xl p-6 border border-gray-700">
-    <h4 className="text-lg font-bold text-white mb-2">Stay Updated</h4>
-    <p className="text-sm text-gray-400 mb-4">
-      Subscribe to get updates on complaint resolutions and system improvements.
-    </p>
-    <form className="flex gap-2">
-      <input
-        type="email"
-        placeholder="Enter your email"
-        className="flex-1 px-4 py-2 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-        aria-label="Email for newsletter"
-      />
-      <button
-        type="submit"
-        className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors"
+  const onSubmit = (e) => {
+    e.preventDefault();
+    const value = email.trim();
+
+    if (!value) {
+      setStatus({ type: "error", message: "Please enter an email address." });
+      return;
+    }
+
+    setStatus({
+      type: "success",
+      message: "Subscribed. Check your inbox for confirmation.",
+    });
+    setEmail("");
+  };
+
+  const statusClass =
+    status.type === "error"
+      ? "text-rose-200"
+      : status.type === "success"
+        ? "text-emerald-200"
+        : "text-zinc-400";
+
+  return (
+    <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+      <p className="text-sm font-extrabold text-zinc-100">Newsletter</p>
+      <p className="mt-1 text-sm text-zinc-400">
+        Occasional updates on features, SLAs, and service improvements.
+      </p>
+
+      <form
+        onSubmit={onSubmit}
+        className="mt-4 flex flex-col gap-3 sm:flex-row"
       >
-        Subscribe
-      </button>
-    </form>
-  </div>
-);
+        <label className="sr-only" htmlFor="footer-newsletter-email">
+          Email address
+        </label>
+        <input
+          id="footer-newsletter-email"
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="name@college.edu"
+          className={cn(
+            "h-11 w-full flex-1 rounded-xl bg-zinc-900/60 px-4 text-sm text-zinc-100",
+            "ring-1 ring-white/10 outline-none",
+            "focus:ring-2 focus:ring-zinc-200/40"
+          )}
+        />
+        <button
+          type="submit"
+          className={cn(
+            "h-11 rounded-xl bg-zinc-100 px-5 text-sm font-extrabold text-zinc-950 transition",
+            "hover:bg-white",
+            "focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-200/40 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950",
+            "motion-reduce:transition-none"
+          )}
+        >
+          Subscribe
+        </button>
+      </form>
 
-// ================================================================
-// 🚀 MAIN COMPONENT
-// ================================================================
+      <p className={cn("mt-3 text-xs", statusClass)} aria-live="polite">
+        {status.message}
+      </p>
+    </div>
+  );
+};
+
+const BackToTopButton = () => (
+  <button
+    type="button"
+    onClick={() => window.scrollTo({ top: 0, behavior: "instant" })}
+    className={cn(
+      "inline-flex items-center gap-2 rounded-lg text-xs text-zinc-500 transition hover:text-zinc-100",
+      "focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-200/40 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950",
+      "motion-reduce:transition-none"
+    )}
+    aria-label="Back to top"
+  >
+    Back to top <FiArrowUpRight className="h-4 w-4 opacity-70" />
+  </button>
+);
 
 const Footer = () => {
-  const currentYear = new Date().getFullYear();
+  const { isAuthenticated, user } = useAuth();
+  const year = new Date().getFullYear();
+
+  const quickLinks = useMemo(() => {
+    const base = [
+      { to: "/help", label: "Getting started" },
+      { to: "/faq", label: "FAQ" },
+      { to: "/about", label: "About" },
+    ];
+
+    const authLinks = [
+      { to: "/complaints/new", label: "New complaint" },
+      { to: "/complaints/my", label: "My complaints" },
+      { to: "/profile", label: "Profile" },
+      { to: "/settings", label: "Settings" },
+    ];
+
+    const adminLinks = [{ to: "/admin", label: "Management" }];
+
+    const links = [...base, ...(isAuthenticated ? authLinks : [])];
+
+    if (isAuthenticated && (user?.role === "admin" || user?.role === "staff")) {
+      links.push(...adminLinks);
+    }
+
+    return links;
+  }, [isAuthenticated, user?.role]);
+
+  const legalLinks = useMemo(
+    () => [
+      { to: "/privacy-policy", label: "Privacy policy" },
+      { to: "/terms-of-service", label: "Terms" },
+      { to: "/cookie-policy", label: "Cookies" },
+      { to: "/accessibility", label: "Accessibility" },
+    ],
+    []
+  );
 
   return (
     <footer
-      className="bg-gray-900 text-gray-300 mt-auto border-t border-gray-800"
+      className="mt-auto border-t border-white/10 bg-zinc-950 text-zinc-200"
       role="contentinfo"
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* ============================================ */}
-        {/* MAIN FOOTER CONTENT */}
-        {/* ============================================ */}
-        <div className="py-12 lg:py-16">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 lg:gap-12">
-            {/* ============================================ */}
-            {/* COLUMN 1: About / Company Info */}
-            {/* ============================================ */}
-            <FooterSection title={COMPANY_INFO.name} className="lg:col-span-1">
-              <p className="text-sm text-gray-400 leading-relaxed">
-                {COMPANY_INFO.description}
+      <div className="bg-gradient-to-b from-white/5 via-transparent to-transparent">
+        <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+          <div className="grid gap-10 lg:grid-cols-12">
+            <div className="space-y-4 lg:col-span-4">
+              <p className="text-lg font-extrabold tracking-tight text-zinc-100">
+                {BRAND.name}
               </p>
-              <div className="pt-4">
-                <SocialMediaLinks />
+              <p className="text-sm font-bold text-zinc-300">{BRAND.tagline}</p>
+              <p className="text-sm leading-relaxed text-zinc-400">
+                {BRAND.description}
+              </p>
+
+              <div className="flex flex-wrap gap-3 pt-2">
+                {SOCIAL.map(({ name, href, Icon }) => (
+                  <a
+                    key={name}
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={name}
+                    className={cn(
+                      "grid h-11 w-11 place-items-center rounded-2xl bg-white/5 ring-1 ring-white/10 transition",
+                      "hover:bg-white/10 hover:ring-white/20",
+                      "focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-200/40 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950",
+                      "motion-reduce:transition-none"
+                    )}
+                  >
+                    <Icon className="h-5 w-5 text-zinc-200" />
+                  </a>
+                ))}
               </div>
-            </FooterSection>
+            </div>
 
-            {/* ============================================ */}
-            {/* COLUMN 2: Quick Links */}
-            {/* ============================================ */}
-            <FooterSection title="Quick Links">
-              <nav>
-                <ul className="space-y-3">
-                  {QUICK_LINKS.map((link) => (
-                    <li key={link.path}>
-                      <Link
-                        to={link.path}
-                        className="text-sm text-gray-400 hover:text-white hover:translate-x-1 transition-all duration-200 inline-flex items-center gap-2 group"
-                      >
-                        <span className="w-1 h-1 bg-blue-500 rounded-full group-hover:w-2 transition-all" />
-                        {link.label}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+            <FooterSection title="Quick links" className="lg:col-span-3">
+              <nav aria-label="Footer quick links" className="space-y-2">
+                {quickLinks.map((l) => (
+                  <div key={l.to}>
+                    <FooterLink to={l.to}>{l.label}</FooterLink>
+                  </div>
+                ))}
               </nav>
-            </FooterSection>
 
-            {/* ============================================ */}
-            {/* COLUMN 3: Contact */}
-            {/* ============================================ */}
-            <FooterSection title="Contact Us">
-              <ul className="space-y-3">
-                <ContactItem
-                  icon={FiMail}
-                  label={COMPANY_INFO.email}
-                  href={`mailto:${COMPANY_INFO.email}`}
-                />
-                <ContactItem
-                  icon={FiPhone}
-                  label={COMPANY_INFO.phone}
-                  href={`tel:${COMPANY_INFO.phone}`}
-                />
-                <ContactItem
-                  icon={FiMapPin}
-                  label={COMPANY_INFO.address}
-                  href="#"
-                />
-              </ul>
-            </FooterSection>
-
-            {/* ============================================ */}
-            {/* COLUMN 4: Hours & Info */}
-            {/* ============================================ */}
-            <FooterSection title="Support Hours">
-              <div className="space-y-3">
-                <div className="flex items-start gap-3">
-                  <div className="p-2 bg-gray-800 rounded-lg">
-                    <FiClock className="w-4 h-4 text-blue-500" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">
-                      {HOURS.support}
-                    </p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {HOURS.responseTime}
-                    </p>
+              {!isAuthenticated ? (
+                <div className="pt-4 text-xs text-zinc-500">
+                  <p className="text-zinc-400">Account</p>
+                  <div className="mt-2 space-y-2">
+                    <FooterLink to="/login">Log in</FooterLink>
+                    <FooterLink to="/register">Register</FooterLink>
+                    <FooterLink to="/forgot-password">
+                      Forgot password
+                    </FooterLink>
                   </div>
                 </div>
-                <div className="p-4 bg-gray-800 rounded-xl border border-gray-700">
-                  <p className="text-xs text-gray-400">{HOURS.office}</p>
+              ) : null}
+            </FooterSection>
+
+            <FooterSection title="Contact" className="lg:col-span-5">
+              <address className="not-italic">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <ContactRow
+                    Icon={FiMail}
+                    label={BRAND.email}
+                    href={`mailto:${BRAND.email}`}
+                  />
+                  <ContactRow
+                    Icon={FiPhone}
+                    label={BRAND.phone}
+                    href={`tel:${BRAND.phone}`}
+                  />
+                  <div className="sm:col-span-2">
+                    <ContactRow
+                      Icon={FiMapPin}
+                      label={`${BRAND.addressLine1}, ${BRAND.addressLine2}`}
+                      href={BRAND.mapsUrl}
+                      isExternal
+                    />
+                  </div>
                 </div>
+              </address>
+
+              <div className="mt-5 grid gap-3 rounded-2xl bg-white/5 p-5 ring-1 ring-white/10 sm:grid-cols-2">
+                {HOURS.map((h) => (
+                  <div key={h.label} className="flex items-start gap-3">
+                    <span className="mt-0.5 grid h-9 w-9 place-items-center rounded-xl bg-zinc-900/60 ring-1 ring-white/10">
+                      <FiClock className="h-4 w-4 text-zinc-200" />
+                    </span>
+                    <div>
+                      <p className="text-xs font-extrabold text-zinc-100">
+                        {h.label}
+                      </p>
+                      <p className="text-xs text-zinc-400">{h.value}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-6">
+                <Newsletter />
               </div>
             </FooterSection>
           </div>
 
-          {/* ============================================ */}
-          {/* NEWSLETTER (Optional) */}
-          {/* ============================================ */}
-          {/* <div className="mt-12">
-            <NewsletterSubscription />
-          </div> */}
-        </div>
-
-        {/* ============================================ */}
-        {/* FOOTER BOTTOM */}
-        {/* ============================================ */}
-        <div className="border-t border-gray-800 py-8">
-          <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-            {/* Copyright */}
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <p>
-                &copy; {COMPANY_INFO.established}-{currentYear}{" "}
-                <span className="font-bold text-white">
-                  {COMPANY_INFO.name}
-                </span>
-                . All rights reserved.
+          <div className="mt-12 border-t border-white/10 pt-7">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <p className="text-xs text-zinc-500">
+                © {BRAND.established}–{year}{" "}
+                <span className="font-bold text-zinc-100">{BRAND.name}</span>.
+                All rights reserved.
               </p>
-            </div>
 
-            {/* Legal Links */}
-            <nav className="flex flex-wrap items-center justify-center gap-6">
-              {LEGAL_LINKS.map((link) => (
-                <Link
-                  key={link.path}
-                  to={link.path}
-                  className="text-xs text-gray-500 hover:text-white transition-colors"
+              <nav
+                aria-label="Footer legal links"
+                className="flex flex-wrap gap-x-6 gap-y-2"
+              >
+                {legalLinks.map((l) => (
+                  <Link
+                    key={l.to}
+                    to={l.to}
+                    className={cn(
+                      "rounded-lg text-xs text-zinc-500 transition hover:text-zinc-100",
+                      "focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-200/40 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950",
+                      "motion-reduce:transition-none"
+                    )}
+                  >
+                    {l.label}
+                  </Link>
+                ))}
+              </nav>
+
+              <div className="flex items-center gap-3">
+                <ExternalLink
+                  href={BRAND.mapsUrl}
+                  ariaLabel="Open location in Google Maps (opens in new tab)"
+                  className="text-xs text-zinc-500 hover:text-zinc-100"
                 >
-                  {link.label}
-                </Link>
-              ))}
-            </nav>
-
-            {/* Made with Love */}
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <span>Made with</span>
-              <FiHeart className="w-3 h-3 text-red-500 animate-pulse" />
-              <span>by ComplaintMS Team</span>
+                  Location
+                </ExternalLink>
+                <BackToTopButton />
+              </div>
             </div>
           </div>
         </div>
@@ -323,22 +407,3 @@ const Footer = () => {
 };
 
 export default Footer;
-
-/**
- * ================================================================
- * 📖 USAGE EXAMPLE
- * ================================================================
- *
- * import Footer from './components/Footer';
- *
- * const App = () => (
- *   <div className="min-h-screen flex flex-col">
- *     <Header />
- *     <main className="flex-1">
- *       {children}
- *     </main>
- *     <Footer />
- *   </div>
- * );
- * ================================================================
- */

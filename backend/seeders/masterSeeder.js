@@ -1,20 +1,11 @@
-/**
- * Master Seeder Script
- * --------------------
- * Provides CLI commands to import or destroy all seed data at once.
- *
- * Usage:
- *   node seeders/masterSeeder.js -i   # Import all seed data
- *   node seeders/masterSeeder.js -d   # Destroy all seed data
- *   node seeders/masterSeeder.js -c   # Clear all collections (optional full wipe)
- */
+// seeders/masterSeeder.js
+// Orchestrates all seeders in proper sequence
 
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
-const logger = require("../utils/logger");
+const logger = require("../utils/logging/logger");
 const connectDB = require("../config/db");
 
-// Load environment variables
 dotenv.config();
 
 // Import individual seeders
@@ -28,62 +19,77 @@ const {
 } = require("./complaintSeeder");
 const { clearData } = require("./clearSeeder");
 
-/**
- * Import all seed data sequentially
- */
+// Import all seed data sequentially
 const importAllData = async () => {
   try {
+    logger.info("🚀 Starting master seeding process...\n");
+
+    // Seed users first (required for complaints)
+    logger.info("Step 1/2: Seeding users...");
     await importUsers();
+
+    // Seed complaints (depends on users)
+    logger.info("\nStep 2/2: Seeding complaints...");
     await importComplaints();
-    // Add other importer calls here if needed
-    logger.info("✅ All seed data imported successfully");
+
+    logger.info("\n✅ All seed data imported successfully");
   } catch (error) {
-    logger.error("❌ Error importing seed data:", error);
+    logger.error("❌ Error importing seed data:", error.message);
     process.exit(1);
   }
 };
 
-/**
- * Destroy all seed data sequentially
- */
+// Destroy all seed data sequentially
 const destroyAllData = async () => {
   try {
-    await destroyUsers();
+    logger.info("🗑️  Starting data destruction...\n");
+
+    // Destroy complaints first (depends on users)
+    logger.info("Step 1/2: Destroying complaints...");
     await destroyComplaints();
-    // Add other destroyer calls here if needed
-    logger.warn("⚠️ All seed data destroyed successfully");
+
+    // Destroy users last
+    logger.info("\nStep 2/2: Destroying users...");
+    await destroyUsers();
+
+    logger.warn("\n⚠️  All seed data destroyed successfully");
   } catch (error) {
-    logger.error("❌ Error destroying seed data:", error);
+    logger.error("❌ Error destroying seed data:", error.message);
     process.exit(1);
   }
 };
 
-/**
- * CLI runner
- */
+// CLI runner
 const run = async () => {
   await connectDB();
 
   const arg = process.argv[2];
+
   try {
     switch (arg) {
       case "-i":
+      case "--import":
         await importAllData();
         break;
       case "-d":
+      case "--destroy":
         await destroyAllData();
         break;
       case "-c":
+      case "--clear":
         await clearData();
         break;
       default:
+        logger.info("📋 Master Seeder Usage:");
+        logger.info("   node seeders/masterSeeder.js -i    Import all data");
+        logger.info("   node seeders/masterSeeder.js -d    Destroy all data");
         logger.info(
-          "Usage: node seeders/masterSeeder.js -i (import) | -d (destroy) | -c (clear all)"
+          "   node seeders/masterSeeder.js -c    Clear all collections"
         );
         process.exit(0);
     }
   } catch (err) {
-    logger.error("❌ Master seeder failed:", err);
+    logger.error("❌ Master seeder failed:", err.message);
     process.exit(1);
   } finally {
     await mongoose.connection.close();
@@ -91,7 +97,7 @@ const run = async () => {
   }
 };
 
-// Execute only if run directly
+// Execute if run directly
 if (require.main === module) {
   run();
 }
