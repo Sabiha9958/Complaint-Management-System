@@ -1,59 +1,36 @@
-// seeders/clearSeeder.js
-// Removes all data from the database collections
-
-const mongoose = require("mongoose");
-const dotenv = require("dotenv");
 const logger = require("../utils/logging/logger");
-const connectDB = require("../config/db");
 
-dotenv.config();
-
-// Import models
 const User = require("../models/user/user.model");
 const Complaint = require("../models/complaint/complaint.model");
 const StatusHistory = require("../models/complaint/statusHistory.model");
 
-// Clear all seed data from database
-const clearData = async () => {
-  await connectDB();
-  try {
-    const [userResult, complaintResult, statusResult] = await Promise.all([
-      User.deleteMany(),
-      Complaint.deleteMany(),
-      StatusHistory.deleteMany(),
-    ]);
+const Role = require("../models/role/Role");
+const Permission = require("../models/role/Permission");
 
-    logger.warn(
-      `⚠️  Seed data cleared successfully:\n` +
-        `   - Users removed: ${userResult.deletedCount}\n` +
-        `   - Complaints removed: ${complaintResult.deletedCount}\n` +
-        `   - StatusHistory removed: ${statusResult.deletedCount}`
-    );
-  } catch (error) {
-    logger.error("❌ Error clearing seed data:", error);
-    process.exit(1);
-  } finally {
-    await mongoose.connection.close();
-    logger.info("🔌 MongoDB connection closed");
-  }
-};
+async function clearData() {
+  const [users, complaints, statuses, roles, permissions] = await Promise.all([
+    User.deleteMany({}),
+    Complaint.deleteMany({}),
+    StatusHistory.deleteMany({}),
+    Role.deleteMany({}),
+    Permission.deleteMany({}),
+  ]);
 
-// CLI runner
-const run = async () => {
-  const arg = process.argv[2];
-  switch (arg) {
-    case "-d":
-      await clearData();
-      break;
-    default:
-      logger.info("Usage: node seeders/clearSeeder.js -d");
-      process.exit(0);
-  }
-};
+  logger.warn(
+    `Cleared Users=${users.deletedCount ?? 0} Complaints=${
+      complaints.deletedCount ?? 0
+    } StatusHistory=${statuses.deletedCount ?? 0} Roles=${
+      roles.deletedCount ?? 0
+    } Permissions=${permissions.deletedCount ?? 0}`
+  );
 
-// Execute if run directly
-if (require.main === module) {
-  run();
+  return {
+    users: users.deletedCount ?? 0,
+    complaints: complaints.deletedCount ?? 0,
+    statusHistory: statuses.deletedCount ?? 0,
+    roles: roles.deletedCount ?? 0,
+    permissions: permissions.deletedCount ?? 0,
+  };
 }
 
 module.exports = { clearData };

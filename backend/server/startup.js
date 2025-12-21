@@ -6,60 +6,93 @@ const {
   validateEnvironment,
   createUploadDirectories,
 } = require("./config");
-
 const buildExpressApp = require("./app");
 const createServerWithWebSocket = require("./websocket");
 const gracefulShutdown = require("./shutdown");
 
-const startServer = async () => {
+function buildPublicUrls() {
+  const httpBase =
+    (CONFIG.BASE_URL && CONFIG.BASE_URL.trim()) ||
+    `http://localhost:${CONFIG.PORT}`;
+
+  const apiUrl = `${httpBase}/api`;
+
+  // Prefer explicit WS public URL in production; fallback derives ws/wss from BASE_URL.
+  const wsUrl =
+    (process.env.WS_PUBLIC_URL && process.env.WS_PUBLIC_URL.trim()) ||
+    `${httpBase
+      .replace(/^http:/, "ws:")
+      .replace(/^https:/, "wss:")}/ws/complaints`;
+
+  return { httpBase, apiUrl, wsUrl };
+}
+
+async function startServer() {
+  // 1) Validate + setup (fail fast)
+  validateEnvironment();
+  createUploadDirectories();
+
+  // 2) Build app + server (but don't listen yet)
+  const app = buildExpressApp();
+  const { server, wss, broadcastComplaint } = createServerWithWebSocket(app);
+
+  // 3) Single shutdown function (guarded)
+  let shuttingDown = false;
+  const shutdownOnce = (reason, err) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    if (err) {
+      logger.error(`💥 ${reason}`, {
+        message: err?.message || String(err),
+        stack: err?.stack,
+      });
+    } else {
+      logger.warn(`🛑 Shutdown requested: ${reason}`);
+    }
+
+    // Delegate to your existing shutdown module
+    gracefulShutdown(reason, server, wss);
+  };
+
+  // 4) Process-level handlers
+  ["SIGTERM", "SIGINT", "SIGUSR2"].forEach((sig) => {
+    process.once(sig, () => shutdownOnce(sig));
+  });
+
+  process.once("uncaughtException", (err) =>
+    shutdownOnce("uncaughtException", err)
+  );
+  process.once("unhandledRejection", (reason) =>
+    shutdownOnce("unhandledRejection", reason)
+  );
+
   try {
-    // Silent validation and setup
-    validateEnvironment();
-    createUploadDirectories();
-
-    const app = buildExpressApp();
-    const { server, wss, broadcastComplaint } = createServerWithWebSocket(app);
-
-    // Connect to database (logs internally)
+    // 5) Connect DB first
     await connectDB();
 
-    // Start server
-    server.listen(CONFIG.PORT, () => {
-      console.log(`\n🚀 Server running on port ${CONFIG.PORT}`);
-      console.log(`📡 API: http://localhost:${CONFIG.PORT}/api`);
-      console.log(
-        `🔌 WebSocket: ws://localhost:${CONFIG.PORT}/ws/complaints\n`
-      );
+    // 6) Start listening
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(CONFIG.PORT, resolve);
     });
 
-    // Graceful shutdown
-    ["SIGTERM", "SIGINT", "SIGUSR2"].forEach((signal) => {
-      process.on(signal, () => gracefulShutdown(signal, server, wss));
-    });
+    const { apiUrl, wsUrl } = buildPublicUrls();
 
-    // Error handlers
-    process.on("uncaughtException", (error) => {
-      logger.error("💥 Uncaught Exception:", {
-        message: error.message,
-        stack: error.stack,
-      });
-      gracefulShutdown("Uncaught Exception", server, wss);
-    });
-
-    process.on("unhandledRejection", (reason, promise) => {
-      logger.error("💥 Unhandled Rejection:", {
-        reason: reason?.message || reason,
-      });
-      gracefulShutdown("Unhandled Rejection", server, wss);
+    logger.info(`🚀 Server started`, {
+      port: CONFIG.PORT,
+      env: CONFIG.NODE_ENV,
+      api: apiUrl,
+      websocket: wsUrl,
     });
 
     return { app, server, wss, broadcastComplaint };
-  } catch (error) {
-    logger.error(`❌ Server startup failed: ${error.message}`, {
-      stack: error.stack,
-    });
-    process.exit(1);
+  } catch (err) {
+    shutdownOnce("startup_failed", err);
+    // If gracefulShutdown doesn’t exit, ensure the process ends with a failure code.
+    process.exitCode = 1;
+    throw err;
   }
-};
+}
 
 module.exports = startServer;

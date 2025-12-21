@@ -37,12 +37,10 @@ const checkComplaintOwnership = async (req, res, next) => {
       String(complaint.user || "") === String(req.user?._id || "");
 
     if (!isAdminOrStaff && !isOwner) {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message: "Not authorized to access this complaint",
-        });
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to access this complaint",
+      });
     }
 
     req.complaint = complaint;

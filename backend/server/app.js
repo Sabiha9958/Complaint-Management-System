@@ -1,9 +1,11 @@
-// backend/server/app.js
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const compression = require("compression");
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
 
 const { CONFIG } = require("./config");
 const attachRoutes = require("./routes");
@@ -12,40 +14,57 @@ const { apiLimiter } = require("../middleware/rate/rateLimiter.middleware");
 const { errorHandler, notFound } = require("../middleware");
 const logger = require("../utils/logging/logger");
 
-const { UPLOAD_BASE } = require("../middleware/upload/upload.config");
-
 const roleRoutes = require("../routes/role/roleRoutes");
 const permissionRoutes = require("../routes/role/permissionRoutes");
 
-function buildAllowedOrigins() {
-  const env = process.env.ALLOWED_ORIGINS;
-  if (!env) {
-    return [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://127.0.0.1:5173",
-    ];
-  }
-  return env.split(",").map((o) => o.trim());
+const UPLOADS_ROOT = path.resolve(process.cwd(), "uploads");
+
+function ensureUploadsDir() {
+  fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
 }
 
-function corsOptions() {
-  const allowedOrigins = buildAllowedOrigins();
+function parseCsvEnv(name) {
+  const raw = process.env[name];
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function buildAllowedOrigins() {
+  const allowed = parseCsvEnv("ALLOWED_ORIGINS");
+
+  // In production, fail fast if you forgot to configure CORS.
+  if (CONFIG.IS_PRODUCTION && allowed.length === 0) {
+    throw new Error(
+      "ALLOWED_ORIGINS is required in production (comma-separated list of allowed origins)"
+    );
+  }
+
+  // Note: If you use cookies (credentials: true), do NOT use "*" (not compatible).
+  if (allowed.includes("*")) {
+    logger.warn("ALLOWED_ORIGINS contains '*'. This is unsafe for auth APIs.");
+  }
+
+  return allowed;
+}
+
+function createCorsOptions() {
+  const allowed = buildAllowedOrigins();
 
   return {
-    origin: (origin, callback) => {
-      if (
-        !origin ||
-        allowedOrigins.includes("*") ||
-        allowedOrigins.includes(origin)
-      ) {
-        return callback(null, true);
-      }
-      logger.warn(`🚫 CORS blocked: ${origin}`);
-      return callback(
-        new Error(`CORS policy violation: ${origin} not allowed`)
-      );
+    origin: (origin, cb) => {
+      // Non-browser clients often send no Origin header.
+      if (!origin) return cb(null, true);
+
+      // If you really want wildcard support, keep it explicit.
+      if (allowed.includes("*")) return cb(null, true);
+
+      if (allowed.includes(origin)) return cb(null, true);
+
+      logger.warn(`CORS blocked: ${origin}`);
+      return cb(new Error(`CORS policy violation: ${origin} not allowed`));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -62,7 +81,7 @@ function corsOptions() {
   };
 }
 
-function helmetOptions() {
+function createHelmetOptions() {
   return {
     contentSecurityPolicy: {
       directives: {
@@ -72,11 +91,9 @@ function helmetOptions() {
         imgSrc: ["'self'", "data:", "https:", "http:"],
         fontSrc: ["'self'", "https:", "data:"],
         connectSrc: ["'self'", "ws:", "wss:", "https:", "http:"],
-        mediaSrc: ["'self'"],
         objectSrc: ["'none'"],
         frameSrc: ["'none'"],
-        // helmet expects an array or undefined; avoid null
-        ...(CONFIG.IS_PRODUCTION ? {} : { upgradeInsecureRequests: null }),
+        upgradeInsecureRequests: CONFIG.IS_PRODUCTION ? [] : null,
       },
     },
     crossOriginEmbedderPolicy: false,
@@ -94,7 +111,12 @@ function helmetOptions() {
 
 function requestId() {
   return (req, res, next) => {
-    req.id = `req_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    const rid =
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
+    req.id = `req_${rid}`;
     res.setHeader("X-Request-Id", req.id);
     next();
   };
@@ -103,7 +125,7 @@ function requestId() {
 function requestTimeout() {
   return (req, res, next) => {
     req.setTimeout(CONFIG.REQUEST_TIMEOUT, () => {
-      logger.error(`⏱️ Timeout: ${req.method} ${req.originalUrl}`);
+      logger.error(`Request timeout: ${req.method} ${req.originalUrl}`);
       if (!res.headersSent) {
         res.status(408).json({
           success: false,
@@ -121,16 +143,11 @@ function slowRequestMonitor() {
   return (req, res, next) => {
     const start = Date.now();
     res.on("finish", () => {
-      const duration = Date.now() - start;
-      if (duration > 5000) {
-        logger.error(
-          `🐌 Slow request: ${req.method} ${req.originalUrl} - ${duration}ms`
-        );
-      } else if (duration > 3000) {
-        logger.warn(
-          `⚠️ Very slow request: ${req.method} ${req.originalUrl} - ${duration}ms`
-        );
-      }
+      const ms = Date.now() - start;
+      if (ms > 5000)
+        logger.error(`Very slow: ${req.method} ${req.originalUrl} - ${ms}ms`);
+      else if (ms > 3000)
+        logger.warn(`Slow: ${req.method} ${req.originalUrl} - ${ms}ms`);
     });
     next();
   };
@@ -139,11 +156,8 @@ function slowRequestMonitor() {
 function trimBodyStrings() {
   return (req, _res, next) => {
     if (!req.body || typeof req.body !== "object") return next();
-
-    for (const key of Object.keys(req.body)) {
-      if (typeof req.body[key] === "string") {
-        req.body[key] = req.body[key].trim();
-      }
+    for (const k of Object.keys(req.body)) {
+      if (typeof req.body[k] === "string") req.body[k] = req.body[k].trim();
     }
     next();
   };
@@ -153,20 +167,37 @@ function httpLogger() {
   if (CONFIG.IS_DEVELOPMENT) return morgan("dev");
   return morgan("combined", {
     stream: logger.stream,
-    skip: (req) => req.url === "/api/health",
+    skip: (req) => req.url === "/api/health" || req.url === "/",
   });
+}
+
+function mountUploads(app) {
+  ensureUploadsDir();
+  app.use(
+    "/uploads",
+    express.static(UPLOADS_ROOT, {
+      maxAge: CONFIG.IS_PRODUCTION ? CONFIG.CACHE_MAX_AGE : 0,
+      etag: true,
+      lastModified: true,
+      setHeaders: (res) => {
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        if (!CONFIG.IS_PRODUCTION) res.setHeader("Cache-Control", "no-store");
+      },
+    })
+  );
 }
 
 function buildExpressApp() {
   const app = express();
 
-  // Core app settings
+  // Keep this only if you're actually behind a reverse proxy (Nginx/Render/Heroku/etc).
   app.set("trust proxy", 1);
+  app.disable("x-powered-by");
   app.set("etag", false);
 
-  // Security + platform middleware
-  app.use(helmet(helmetOptions()));
-  app.use(cors(corsOptions()));
+  app.use(helmet(createHelmetOptions()));
+  app.use(cors(createCorsOptions()));
+
   app.use(
     compression({
       filter: (req, res) =>
@@ -176,44 +207,45 @@ function buildExpressApp() {
     })
   );
 
-  // Body parsing
   app.use(express.json({ limit: CONFIG.MAX_FILE_SIZE }));
   app.use(express.urlencoded({ limit: CONFIG.MAX_FILE_SIZE, extended: true }));
 
-  // Observability
   app.use(httpLogger());
   app.use(requestId());
   app.use(requestTimeout());
   app.use(slowRequestMonitor());
-
-  // Input hygiene
   app.use(trimBodyStrings());
 
-  // Static files
-  app.use(
-    "/uploads",
-    express.static(UPLOAD_BASE, {
-      maxAge: CONFIG.IS_PRODUCTION ? CONFIG.CACHE_MAX_AGE : 0,
-      etag: false,
-      lastModified: true,
-      setHeaders: (res) => {
-        res.setHeader("X-Content-Type-Options", "nosniff");
-        if (CONFIG.IS_DEVELOPMENT) {
-          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-        }
-      },
-    })
-  );
+  mountUploads(app);
 
-  // Rate limiting (apply to all /api routes)
+  app.get("/", (_req, res) => {
+    res.status(200).json({
+      success: true,
+      message: "Backend API is running",
+      service: "Complaint Management System",
+      version: CONFIG.API_VERSION,
+      environment: CONFIG.NODE_ENV,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  app.head("/", (_req, res) => res.status(200).end());
+
+  app.get("/api/health", (_req, res) => {
+    res.status(200).json({
+      success: true,
+      message: "API is healthy",
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   app.use("/api", apiLimiter);
 
-  // Routes (mount “simple” routers first, then the rest)
   app.use("/api/roles", roleRoutes);
   app.use("/api/permissions", permissionRoutes);
   attachRoutes(app);
 
-  // Errors (must be last)
   app.use(notFound);
   app.use(errorHandler);
 
@@ -221,3 +253,4 @@ function buildExpressApp() {
 }
 
 module.exports = buildExpressApp;
+module.exports.UPLOADS_ROOT = UPLOADS_ROOT;

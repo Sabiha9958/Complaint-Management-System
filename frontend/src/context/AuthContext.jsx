@@ -24,16 +24,27 @@ export const useAuth = () => {
   return ctx;
 };
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-const ASSET_ORIGIN = (() => {
-  try {
-    return new URL(API_URL).origin;
-  } catch {
-    return "http://localhost:5000";
-  }
-})();
+const API_URL = import.meta.env.VITE_API_URL;
 
-// Helper Functions
+const getOrigin = (url) => {
+  const u = String(url || "").trim();
+  if (!u) throw new Error("VITE_API_URL is missing");
+  return new URL(u).origin;
+};
+
+const ASSET_ORIGIN = getOrigin(API_URL);
+
+const TOAST_SUCCESS_MS = 1500;
+const TOAST_ERROR_MS = 2500;
+const TOAST_INFO_MS = 1500;
+
+const notifySuccess = (msg) =>
+  toast.success(msg, { position: "top-left", autoClose: TOAST_SUCCESS_MS });
+const notifyError = (msg) =>
+  toast.error(msg, { position: "top-left", autoClose: TOAST_ERROR_MS });
+const notifyInfo = (msg) =>
+  toast.info(msg, { position: "top-left", autoClose: TOAST_INFO_MS });
+
 const isProbablyUser = (obj) =>
   obj && typeof obj === "object" && (obj._id || obj.id || obj.email);
 
@@ -80,11 +91,7 @@ const withCacheVersion = (absoluteUrl, version) => {
 const getErrorMessage = (err, fallback) => {
   const payload = err?.response?.data;
   return (
-    payload?.message ||
-    payload?.error ||
-    err?.message ||
-    fallback ||
-    "Something went wrong"
+    payload?.message || payload?.error || err?.message || fallback || "Failed"
   );
 };
 
@@ -155,14 +162,10 @@ export const AuthProvider = ({ children }) => {
     [persistUser]
   );
 
-  // ✅ NEW: updateUser function for Login.jsx
   const updateUser = useCallback(
     (userData) => {
-      if (!userData) {
-        toast.error("Invalid user data");
-        return;
-      }
       const normalized = normalizeUser(userData);
+      if (!normalized) return;
       applyUser(normalized);
     },
     [applyUser, normalizeUser]
@@ -179,18 +182,16 @@ export const AuthProvider = ({ children }) => {
     try {
       const res = await api.get("/auth/me");
       const u = unwrapUser(res);
-      if (!u) throw new Error("Invalid /auth/me response");
+      if (!u) return null;
 
       const normalized = normalizeUser(u);
       applyUser(normalized);
       return normalized;
-    } catch (error) {
-      console.error("Failed to refresh user:", error);
+    } catch {
       return null;
     }
   }, [applyUser, normalizeUser]);
 
-  // Initialize auth state on mount
   useEffect(() => {
     (async () => {
       try {
@@ -205,7 +206,6 @@ export const AuthProvider = ({ children }) => {
     })();
   }, [clearAuthStorage, normalizeUser, refreshMe]);
 
-  // Listen for auth changes
   useEffect(() => {
     return onAuthChanged(() => {
       const latest = UserManager.get();
@@ -216,11 +216,10 @@ export const AuthProvider = ({ children }) => {
     });
   }, [normalizeUser]);
 
-  // Handle session expiration
   useEffect(() => {
     const handleLogout = () => {
       clearAuthStorage();
-      toast.error("Session expired. Please log in.");
+      notifyError("Session expired");
     };
     window.addEventListener("auth:logout", handleLogout);
     return () => window.removeEventListener("auth:logout", handleLogout);
@@ -228,24 +227,26 @@ export const AuthProvider = ({ children }) => {
 
   const login = useCallback(
     async (email, password) => {
-      if (!email?.trim() || !password?.trim()) {
-        toast.error("Email and password are required");
-        return { success: false, message: "Email and password are required" };
+      const e = String(email || "")
+        .trim()
+        .toLowerCase();
+      const p = String(password || "").trim();
+
+      if (!e || !p) {
+        notifyError("Email & password required");
+        return { success: false, message: "Email & password required" };
       }
 
       setLoading(true);
       try {
-        const res = await api.post("/auth/login", {
-          email: email.trim().toLowerCase(),
-          password: password.trim(),
-        });
+        const res = await api.post("/auth/login", { email: e, password: p });
 
         const payload = unwrapPayload(res);
         const accessToken = payload?.accessToken;
         const refreshToken = payload?.refreshToken;
         const u = unwrapUser(res) || payload?.user;
 
-        if (!accessToken || !u) throw new Error("Invalid response from server");
+        if (!accessToken || !u) throw new Error("Invalid response");
 
         TokenManager.set(accessToken);
         if (refreshToken && TokenManager.setRefresh)
@@ -254,11 +255,11 @@ export const AuthProvider = ({ children }) => {
         const normalized = normalizeUser(u);
         applyUser(normalized);
 
-        toast.success("Login successful!");
+        notifySuccess("Logged in");
         return { success: true, user: normalized, accessToken, refreshToken };
-      } catch (e) {
-        const msg = getErrorMessage(e, "Login failed. Please try again.");
-        toast.error(msg);
+      } catch (e2) {
+        const msg = getErrorMessage(e2, "Login failed");
+        notifyError(msg);
         return { success: false, message: msg };
       } finally {
         setLoading(false);
@@ -279,7 +280,7 @@ export const AuthProvider = ({ children }) => {
         const refreshToken = data?.refreshToken;
         const u = unwrapUser(res) || data?.user;
 
-        if (!accessToken || !u) throw new Error("Invalid response from server");
+        if (!accessToken || !u) throw new Error("Invalid response");
 
         TokenManager.set(accessToken);
         if (refreshToken && TokenManager.setRefresh)
@@ -288,14 +289,11 @@ export const AuthProvider = ({ children }) => {
         const normalized = normalizeUser(u);
         applyUser(normalized);
 
-        toast.success("Registration successful!");
+        notifySuccess("Registered");
         return { success: true, user: normalized, accessToken, refreshToken };
       } catch (e) {
-        const msg = getErrorMessage(
-          e,
-          "Registration failed. Please try again."
-        );
-        toast.error(msg);
+        const msg = getErrorMessage(e, "Register failed");
+        notifyError(msg);
         return { success: false, message: msg };
       } finally {
         setLoading(false);
@@ -307,19 +305,18 @@ export const AuthProvider = ({ children }) => {
   const logout = useCallback(async () => {
     try {
       await api.post("/auth/logout");
-    } catch (error) {
-      console.error("Logout API error:", error);
+    } catch {
     } finally {
       clearAuthStorage();
-      toast.info("Logged out successfully");
+      notifyInfo("Logged out");
     }
   }, [clearAuthStorage]);
 
   const updateProfile = useCallback(
     async (updates) => {
       if (!user) {
-        toast.error("Please log in to update your profile");
-        return { success: false };
+        notifyError("Login required");
+        return { success: false, message: "Login required" };
       }
 
       const previous = user;
@@ -334,21 +331,20 @@ export const AuthProvider = ({ children }) => {
       setLoading(true);
       try {
         const res = await api.put("/auth/me", updates);
-
         const u = unwrapUser(res) || (await refreshMe());
-        if (!u) throw new Error("Invalid profile update response");
+        if (!u) throw new Error("Invalid response");
 
         const normalized = normalizeUser(u, {
           coverVersion: updates?.coverId ? Date.now() : undefined,
         });
 
         applyUser(normalized);
-        toast.success("Profile updated successfully!");
+        notifySuccess("Updated");
         return { success: true, user: normalized };
       } catch (e) {
         applyUser(previous);
-        const msg = getErrorMessage(e, "Failed to update profile");
-        toast.error(msg);
+        const msg = getErrorMessage(e, "Update failed");
+        notifyError(msg);
         return { success: false, message: msg };
       } finally {
         setLoading(false);
@@ -360,10 +356,10 @@ export const AuthProvider = ({ children }) => {
   const uploadAvatar = useCallback(
     async (file) => {
       if (!user) {
-        toast.error("Please log in to upload a profile picture");
-        return { success: false };
+        notifyError("Login required");
+        return { success: false, message: "Login required" };
       }
-      if (!file) return { success: false, message: "No file selected" };
+      if (!file) return { success: false, message: "No file" };
 
       const previous = user;
       const previewUrl = URL.createObjectURL(file);
@@ -379,17 +375,17 @@ export const AuthProvider = ({ children }) => {
         });
 
         const u = unwrapUser(res) || (await refreshMe());
-        if (!u) throw new Error("Invalid avatar update response");
+        if (!u) throw new Error("Invalid response");
 
         const normalized = normalizeUser(u, { bustAvatar: true });
         applyUser(normalized);
 
-        toast.success("Profile picture updated!");
+        notifySuccess("Avatar updated");
         return { success: true, user: normalized };
       } catch (e) {
         applyUser(previous);
-        const msg = getErrorMessage(e, "Failed to upload profile picture");
-        toast.error(msg);
+        const msg = getErrorMessage(e, "Upload failed");
+        notifyError(msg);
         return { success: false, message: msg };
       } finally {
         URL.revokeObjectURL(previewUrl);
@@ -402,10 +398,10 @@ export const AuthProvider = ({ children }) => {
   const uploadCover = useCallback(
     async (file) => {
       if (!user) {
-        toast.error("Please log in to upload a cover image");
-        return { success: false };
+        notifyError("Login required");
+        return { success: false, message: "Login required" };
       }
-      if (!file) return { success: false, message: "No file selected" };
+      if (!file) return { success: false, message: "No file" };
 
       const previous = user;
       const previewUrl = URL.createObjectURL(file);
@@ -421,17 +417,17 @@ export const AuthProvider = ({ children }) => {
         });
 
         const u = unwrapUser(res) || (await refreshMe());
-        if (!u) throw new Error("Invalid cover update response");
+        if (!u) throw new Error("Invalid response");
 
         const normalized = normalizeUser(u, { bustCover: true });
         applyUser(normalized);
 
-        toast.success("Cover image updated!");
+        notifySuccess("Cover updated");
         return { success: true, user: normalized };
       } catch (e) {
         applyUser(previous);
-        const msg = getErrorMessage(e, "Failed to upload cover image");
-        toast.error(msg);
+        const msg = getErrorMessage(e, "Upload failed");
+        notifyError(msg);
         return { success: false, message: msg };
       } finally {
         URL.revokeObjectURL(previewUrl);
@@ -451,7 +447,7 @@ export const AuthProvider = ({ children }) => {
       register,
       logout,
       refreshMe,
-      updateUser, // ✅ Added to context value
+      updateUser,
       updateProfile,
       uploadAvatar,
       uploadCover,
@@ -464,7 +460,7 @@ export const AuthProvider = ({ children }) => {
       register,
       logout,
       refreshMe,
-      updateUser, // ✅ Added to dependencies
+      updateUser,
       updateProfile,
       uploadAvatar,
       uploadCover,
@@ -476,7 +472,7 @@ export const AuthProvider = ({ children }) => {
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-50">
         <div className="text-center">
           <div className="mx-auto mb-4 h-16 w-16 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600" />
-          <p className="text-lg font-semibold text-gray-700">Initializing...</p>
+          <p className="text-lg font-semibold text-gray-700">Loading</p>
         </div>
       </div>
     );

@@ -1,7 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "react-toastify";
+import { clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
 import apiClient from "../../api/apiClient";
 import { useAuth } from "../../context/AuthContext";
 import {
@@ -14,727 +22,675 @@ import {
   FiCalendar,
   FiMessageSquare,
   FiPaperclip,
-  FiEye,
+  FiArrowRight,
   FiRefreshCw,
   FiTrash2,
-  FiEdit2,
+  FiEdit3,
   FiAlertCircle,
   FiLock,
+  FiFilter,
 } from "react-icons/fi";
 
-/* ================================================================
-  CONFIG (backend-aligned)
-================================================================ */
-const STATUS_CONFIG = {
+function cn(...inputs) {
+  return twMerge(clsx(inputs));
+}
+
+const API_URL = import.meta.env.VITE_API_URL;
+
+const buildWsUrl = () => {
+  if (!API_URL) throw new Error("VITE_API_URL is missing");
+  const u = new URL(API_URL);
+  const wsProtocol = u.protocol === "https:" ? "wss:" : "ws:";
+  return `${wsProtocol}//${u.host}/ws/complaints`;
+};
+
+const WS_URL = import.meta.env.VITE_WS_URL?.trim() || buildWsUrl();
+
+const TOAST = {
+  success: (msg) =>
+    toast.success(msg, { position: "top-left", autoClose: 1500 }),
+  error: (msg) => toast.error(msg, { position: "top-left", autoClose: 2500 }),
+  info: (msg) => toast.info(msg, { position: "top-left", autoClose: 1500 }),
+};
+
+const VARIANTS = {
+  container: {
+    hidden: { opacity: 0 },
+    show: { opacity: 1, transition: { staggerChildren: 0.05 } },
+  },
+  item: { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } },
+};
+
+const STATUS_STYLES = {
   pending: {
     label: "Pending",
-    chip: "bg-amber-50 text-amber-800 border-amber-200",
-    tab: "text-amber-700 data-[active=true]:bg-amber-50 data-[active=true]:border-amber-200",
+    bg: "bg-amber-100",
+    text: "text-amber-700",
+    border: "border-amber-200",
     Icon: FiClock,
   },
   in_progress: {
     label: "In Progress",
-    chip: "bg-blue-50 text-blue-800 border-blue-200",
-    tab: "text-blue-700 data-[active=true]:bg-blue-50 data-[active=true]:border-blue-200",
+    bg: "bg-blue-100",
+    text: "text-blue-700",
+    border: "border-blue-200",
     Icon: FiRefreshCw,
   },
   resolved: {
     label: "Resolved",
-    chip: "bg-emerald-50 text-emerald-800 border-emerald-200",
-    tab: "text-emerald-700 data-[active=true]:bg-emerald-50 data-[active=true]:border-emerald-200",
+    bg: "bg-emerald-100",
+    text: "text-emerald-700",
+    border: "border-emerald-200",
     Icon: FiCheckCircle,
   },
   rejected: {
     label: "Rejected",
-    chip: "bg-rose-50 text-rose-800 border-rose-200",
-    tab: "text-rose-700 data-[active=true]:bg-rose-50 data-[active=true]:border-rose-200",
+    bg: "bg-rose-100",
+    text: "text-rose-700",
+    border: "border-rose-200",
     Icon: FiX,
   },
   closed: {
     label: "Closed",
-    chip: "bg-slate-50 text-slate-800 border-slate-200",
-    tab: "text-slate-700 data-[active=true]:bg-slate-50 data-[active=true]:border-slate-200",
+    bg: "bg-slate-100",
+    text: "text-slate-700",
+    border: "border-slate-200",
     Icon: FiLock,
   },
 };
 
-const PRIORITY_CONFIG = {
-  urgent: { label: "Urgent", chip: "bg-rose-50 text-rose-700 border-rose-200" },
-  high: {
-    label: "High",
-    chip: "bg-orange-50 text-orange-700 border-orange-200",
-  },
-  medium: { label: "Medium", chip: "bg-blue-50 text-blue-700 border-blue-200" },
-  low: { label: "Low", chip: "bg-slate-50 text-slate-700 border-slate-200" },
+const PRIORITY_STYLES = {
+  urgent: "bg-rose-50 text-rose-600 border-rose-200 ring-rose-500/20",
+  high: "bg-orange-50 text-orange-600 border-orange-200 ring-orange-500/20",
+  medium: "bg-blue-50 text-blue-600 border-blue-200 ring-blue-500/20",
+  low: "bg-slate-50 text-slate-600 border-slate-200 ring-slate-500/20",
 };
 
-const safeStatus = (s) => (STATUS_CONFIG[s] ? s : "pending");
-const safePriority = (p) => (PRIORITY_CONFIG[p] ? p : "medium");
+const FILTER_KEYS = [
+  "all",
+  "pending",
+  "in_progress",
+  "resolved",
+  "rejected",
+  "closed",
+];
+
+const getStatusStyle = (s) => STATUS_STYLES[s] || STATUS_STYLES.pending;
+const getPriorityStyle = (p) => PRIORITY_STYLES[p] || PRIORITY_STYLES.medium;
 
 const formatDate = (dateString) => {
   if (!dateString) return "N/A";
   return new Date(dateString).toLocaleDateString("en-IN", {
-    day: "2-digit",
+    day: "numeric",
     month: "short",
     year: "numeric",
   });
 };
 
-const parseApiList = (payload) => {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload?.complaints)) return payload.complaints;
-  return [];
-};
-
-/* ================================================================
-  SMALL HOOKS
-================================================================ */
-function useDebouncedValue(value, delay = 250) {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-  return debounced;
-}
-
-/* ================================================================
-  UI PRIMITIVES
-================================================================ */
-const StatCard = ({ title, value, tone = "slate" }) => {
-  const tones = {
-    slate: "bg-slate-50 border-slate-200 text-slate-800",
-    amber: "bg-amber-50 border-amber-200 text-amber-800",
-    emerald: "bg-emerald-50 border-emerald-200 text-emerald-800",
-    rose: "bg-rose-50 border-rose-200 text-rose-800",
-  };
-
+function Badge({ children, className }) {
   return (
-    <div className={`rounded-2xl border p-4 ${tones[tone] || tones.slate}`}>
-      <p className="text-xs font-semibold uppercase tracking-wide opacity-80">
-        {title}
-      </p>
-      <p className="mt-1 text-2xl font-extrabold">{value}</p>
-    </div>
-  );
-};
-
-const Chip = ({ Icon, children, className = "" }) => (
-  <span
-    className={[
-      "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold",
-      className,
-    ].join(" ")}
-  >
-    {Icon ? <Icon className="h-4 w-4" /> : null}
-    {children}
-  </span>
-);
-
-const IconButton = ({ title, onClick, tone = "slate", children, disabled }) => {
-  const tones = {
-    slate:
-      "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900",
-    blue: "border-blue-200 bg-white text-slate-700 hover:bg-blue-50 hover:text-blue-700",
-    rose: "border-rose-200 bg-white text-slate-700 hover:bg-rose-50 hover:text-rose-700",
-  };
-
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={onClick}
-      disabled={disabled}
-      className={[
-        "inline-flex h-9 w-9 items-center justify-center rounded-lg border transition",
-        "disabled:opacity-50 disabled:cursor-not-allowed",
-        tones[tone] || tones.slate,
-      ].join(" ")}
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border",
+        className
+      )}
     >
       {children}
-    </button>
+    </span>
   );
-};
+}
 
-const SkeletonCard = () => (
-  <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-    <div className="flex items-center justify-between">
-      <div className="h-6 w-28 bg-gray-100 rounded-lg animate-pulse" />
-      <div className="h-5 w-14 bg-gray-100 rounded-lg animate-pulse" />
+function StatItem({ label, value, colorClass }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+        {label}
+      </span>
+      <span className={cn("text-2xl font-bold mt-0.5", colorClass)}>
+        {value}
+      </span>
     </div>
-    <div className="mt-4 h-5 w-3/4 bg-gray-100 rounded-lg animate-pulse" />
-    <div className="mt-3 space-y-2">
-      <div className="h-4 w-full bg-gray-100 rounded-lg animate-pulse" />
-      <div className="h-4 w-5/6 bg-gray-100 rounded-lg animate-pulse" />
-    </div>
-    <div className="mt-5 flex gap-2">
-      <div className="h-7 w-24 bg-gray-100 rounded-full animate-pulse" />
-      <div className="h-7 w-28 bg-gray-100 rounded-full animate-pulse" />
-    </div>
-  </div>
-);
+  );
+}
 
-const StatusTabs = ({ value, onChange, counts }) => {
-  const tabs = [
-    { key: "all", label: "All" },
-    ...Object.keys(STATUS_CONFIG).map((k) => ({
-      key: k,
-      label: STATUS_CONFIG[k].label,
-    })),
-  ];
+function DeleteModal({ isOpen, onClose, onConfirm, isDeleting }) {
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <motion.button
+            type="button"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            onClick={onClose}
+            aria-label="Close delete modal"
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 10 }}
+            className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Delete complaint"
+          >
+            <div className="p-6 text-center">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-rose-50">
+                <FiTrash2
+                  className="h-8 w-8 text-rose-500"
+                  aria-hidden="true"
+                />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900">
+                Delete Complaint?
+              </h3>
+              <p className="mt-2 text-sm text-slate-500">
+                This action cannot be undone.
+              </p>
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={isDeleting}
+                  className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={onConfirm}
+                  disabled={isDeleting}
+                  className="flex-1 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 transition flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {isDeleting ? (
+                    <FiRefreshCw className="animate-spin" />
+                  ) : (
+                    "Delete"
+                  )}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function ComplaintCard({ data, onEdit, onDelete }) {
+  const status = getStatusStyle(data.status);
+  const priorityClass = getPriorityStyle(data.priority);
+  const isEditable = (data.status || "pending") === "pending";
+  const StatusIcon = status.Icon;
 
   return (
-    <div className="flex flex-wrap gap-2">
-      {tabs.map((t) => {
-        const active = value === t.key;
-        const cfg = STATUS_CONFIG[t.key];
+    <motion.div
+      variants={VARIANTS.item}
+      className="group relative flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300"
+    >
+      <div className="p-5 flex-1">
+        <div className="flex justify-between items-start mb-4">
+          <Badge className={cn(status.bg, status.text, status.border)}>
+            <StatusIcon className="w-3.5 h-3.5" aria-hidden="true" />
+            {status.label}
+          </Badge>
+
+          {isEditable && (
+            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                type="button"
+                onClick={() => onEdit(data._id)}
+                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                title="Edit"
+              >
+                <FiEdit3 className="w-4 h-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(data._id)}
+                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                title="Delete"
+              >
+                <FiTrash2 className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        <Link
+          to={`/complaints/${data._id}`}
+          className="block group-hover:text-blue-600 transition-colors"
+        >
+          <h3 className="text-lg font-bold text-slate-900 leading-tight mb-2 line-clamp-1">
+            {data.title}
+          </h3>
+        </Link>
+
+        <p className="text-sm text-slate-500 line-clamp-2 mb-4 h-10">
+          {data.description || "No description provided."}
+        </p>
+
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Badge className={priorityClass}>{data.priority || "Medium"}</Badge>
+          <Badge className="bg-slate-50 text-slate-600 border-slate-200">
+            {data.department || "General"}
+          </Badge>
+        </div>
+      </div>
+
+      <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/50 rounded-b-2xl flex items-center justify-between">
+        <div className="flex items-center gap-3 text-slate-400 text-xs font-medium">
+          <span className="flex items-center gap-1">
+            <FiCalendar className="w-3.5 h-3.5" aria-hidden="true" />
+            {formatDate(data.createdAt)}
+          </span>
+
+          {(data.attachments?.length > 0 || data.comments?.length > 0) && (
+            <div className="flex gap-3 pl-3 border-l border-slate-200">
+              {data.attachments?.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <FiPaperclip className="w-3.5 h-3.5" aria-hidden="true" />
+                  {data.attachments.length}
+                </span>
+              )}
+              {data.comments?.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <FiMessageSquare className="w-3.5 h-3.5" aria-hidden="true" />
+                  {data.comments.length}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        <Link
+          to={`/complaints/${data._id}`}
+          className="text-sm font-semibold text-blue-600 flex items-center gap-1 hover:gap-2 transition-all"
+        >
+          View <FiArrowRight aria-hidden="true" />
+        </Link>
+      </div>
+    </motion.div>
+  );
+}
+
+function StatusFilters({ filter, onChange }) {
+  return (
+    <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 max-w-full">
+      {FILTER_KEYS.map((key) => {
+        const isActive = filter === key;
+        const label = key === "all" ? "All Tickets" : getStatusStyle(key).label;
+
         return (
           <button
-            key={t.key}
+            key={key}
             type="button"
-            data-active={active}
-            onClick={() => onChange(t.key)}
-            className={[
-              "inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition",
-              "bg-white hover:bg-gray-50",
-              active ? "border-gray-300" : "border-gray-200",
-              cfg?.tab ||
-                "text-gray-700 data-[active=true]:bg-gray-50 data-[active=true]:border-gray-200",
-            ].join(" ")}
+            onClick={() => onChange(key)}
+            className={cn(
+              "whitespace-nowrap px-4 py-2 rounded-lg text-sm font-medium transition-all border",
+              isActive
+                ? "bg-slate-900 text-white border-slate-900 shadow-lg shadow-slate-200"
+                : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+            )}
           >
-            {cfg?.Icon ? <cfg.Icon className="h-4 w-4" /> : null}
-            <span>{t.label}</span>
-            <span className="ml-1 rounded-lg bg-gray-100 px-2 py-0.5 text-xs font-bold text-gray-700">
-              {counts?.[t.key] ?? 0}
-            </span>
+            {label}
           </button>
         );
       })}
     </div>
   );
-};
+}
 
-/* ================================================================
-  DELETE MODAL
-================================================================ */
-const DeleteModal = ({ isOpen, onClose, onConfirm, isDeleting }) => (
-  <AnimatePresence>
-    {isOpen ? (
-      <motion.div
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        role="dialog"
-        aria-modal="true"
-        onClick={onClose}
-      >
-        <motion.div
-          initial={{ opacity: 0, y: 12, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 12, scale: 0.98 }}
-          onClick={(e) => e.stopPropagation()}
-          className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white shadow-2xl"
-        >
-          <div className="p-6">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 border border-rose-200">
-              <FiAlertCircle className="h-6 w-6 text-rose-600" />
-            </div>
-
-            <h3 className="text-lg font-bold text-gray-900 text-center">
-              Delete complaint?
-            </h3>
-            <p className="mt-2 text-sm text-gray-600 text-center">
-              This action cannot be undone.
-            </p>
-
-            <div className="mt-6 grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={isDeleting}
-                className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-100 transition disabled:opacity-50"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={onConfirm}
-                disabled={isDeleting}
-                className="rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 transition disabled:opacity-50 inline-flex items-center justify-center gap-2"
-              >
-                {isDeleting ? (
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                ) : (
-                  <FiTrash2 className="h-4 w-4" />
-                )}
-                Delete
-              </button>
-            </div>
-          </div>
-        </motion.div>
-      </motion.div>
-    ) : null}
-  </AnimatePresence>
-);
-
-/* ================================================================
-  CARD (location removed)
-================================================================ */
-const ComplaintCard = ({ complaint, onEdit, onDelete }) => {
-  const statusKey = safeStatus(complaint?.status);
-  const priorityKey = safePriority(complaint?.priority);
-
-  const status = STATUS_CONFIG[statusKey];
-  const priority = PRIORITY_CONFIG[priorityKey];
-
-  const canEditOrDelete = statusKey === "pending";
-
-  const attachmentCount = complaint?.attachments?.length || 0;
-  const commentCount = complaint?.comments?.length || 0;
-
-  return (
-    <motion.article
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.98 }}
-      whileHover={{ y: -3 }}
-      transition={{ duration: 0.18 }}
-      className="group rounded-2xl border border-gray-200 bg-white shadow-sm hover:shadow-lg transition overflow-hidden flex flex-col"
-    >
-      {/* Top bar */}
-      <div className="px-5 py-3 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white flex items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Chip Icon={status.Icon} className={status.chip}>
-            {status.label}
-          </Chip>
-          <Chip className={priority.chip}>{priority.label} priority</Chip>
-          {complaint?.category ? (
-            <Chip className="bg-indigo-50 text-indigo-700 border-indigo-200">
-              {String(complaint.category).replaceAll("_", " ")}
-            </Chip>
-          ) : null}
-          {complaint?.department ? (
-            <Chip className="bg-slate-50 text-slate-700 border-slate-200">
-              {complaint.department}
-            </Chip>
-          ) : null}
-        </div>
-
-        <span className="text-[11px] font-mono text-gray-400">
-          #
-          {String(complaint?._id || "")
-            .slice(-6)
-            .toUpperCase()}
-        </span>
-      </div>
-
-      {/* Body */}
-      <div className="p-5 flex-1">
-        <h3 className="text-base font-bold text-gray-900 leading-snug line-clamp-2">
-          {complaint?.title || "Untitled"}
-        </h3>
-
-        <p className="mt-2 text-sm text-gray-600 leading-relaxed line-clamp-3">
-          {complaint?.description || "No description provided."}
-        </p>
-
-        {/* Date info */}
-        <div className="mt-4 inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-          <FiCalendar className="h-4 w-4 text-gray-400" />
-          <span>Submitted: {formatDate(complaint?.createdAt)}</span>
-        </div>
-
-        {(attachmentCount > 0 || commentCount > 0) && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {attachmentCount > 0 && (
-              <Chip className="bg-blue-50 text-blue-700 border-blue-200">
-                <FiPaperclip className="h-4 w-4" />
-                {attachmentCount} file{attachmentCount > 1 ? "s" : ""}
-              </Chip>
-            )}
-            {commentCount > 0 && (
-              <Chip className="bg-purple-50 text-purple-700 border-purple-200">
-                <FiMessageSquare className="h-4 w-4" />
-                {commentCount} comment{commentCount > 1 ? "s" : ""}
-              </Chip>
-            )}
-          </div>
-        )}
-
-        {complaint?.updatedAt &&
-        complaint?.updatedAt !== complaint?.createdAt ? (
-          <p className="mt-3 text-[11px] text-gray-400">
-            Last updated: {formatDate(complaint.updatedAt)}
-          </p>
-        ) : null}
-      </div>
-
-      {/* Footer */}
-      <div className="px-5 py-3 border-t border-gray-200 bg-gray-50 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          {canEditOrDelete && (
-            <>
-              <IconButton
-                title="Edit"
-                onClick={() => onEdit(complaint._id)}
-                tone="blue"
-              >
-                <FiEdit2 className="h-4 w-4" />
-              </IconButton>
-              <IconButton
-                title="Delete"
-                onClick={() => onDelete(complaint._id)}
-                tone="rose"
-              >
-                <FiTrash2 className="h-4 w-4" />
-              </IconButton>
-            </>
-          )}
-        </div>
-
-        <Link
-          to={`/complaints/${complaint._id}`}
-          className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 hover:text-blue-700 transition"
-        >
-          <FiEye className="h-4 w-4" />
-          View
-        </Link>
-      </div>
-    </motion.article>
-  );
-};
-
-/* ================================================================
-  MAIN PAGE
-================================================================ */
 export default function MyComplaints() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
   const [complaints, setComplaints] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
-
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [searchTerm, setSearchTerm] = useState("");
-  const debouncedSearch = useDebouncedValue(searchTerm, 250);
-  const [sortBy, setSortBy] = useState("newest");
-
-  const [deleteModal, setDeleteModal] = useState({ isOpen: false, id: null });
+  const [error, setError] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState("newest");
+  const [deleteModal, setDeleteModal] = useState({ open: false, id: null });
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const load = useCallback(async () => {
+  const wsRef = useRef(null);
+  const reconnectRef = useRef(null);
+
+  const fetchComplaints = useCallback(async () => {
+    const controller = new AbortController();
+
     setLoading(true);
-    setLoadError("");
+    setError("");
+
     try {
-      const res = await apiClient.get("/complaints/my");
-      const list = parseApiList(res?.data ?? res);
+      const res = await apiClient.get("/complaints/my", {
+        signal: controller.signal,
+      });
+      const list = Array.isArray(res?.data)
+        ? res.data
+        : res?.data?.complaints || [];
       setComplaints(list);
     } catch (err) {
-      console.error(err);
-      setLoadError("Failed to load your complaints.");
-      toast.error("Failed to load your complaints.");
-      setComplaints([]);
+      if (err?.name === "CanceledError" || err?.name === "AbortError") return;
+      setError("Unable to load complaints");
+      TOAST.error("Network error");
     } finally {
       setLoading(false);
     }
+
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let cleanup = null;
+    (async () => {
+      cleanup = await fetchComplaints();
+    })();
+    return () => cleanup?.();
+  }, [fetchComplaints]);
 
-  // Optional: websocket sync
   useEffect(() => {
-    if (!user) return;
-    const wsUrl =
-      import.meta.env.VITE_WS_URL || "ws://localhost:5000/ws/complaints";
-    const socket = new WebSocket(wsUrl);
+    const userId = user?._id;
+    if (!userId) return;
 
-    socket.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
+    let stopped = false;
 
-        if (msg.type === "UPDATED_COMPLAINT" && msg.data?.user === user._id) {
-          setComplaints((prev) =>
-            prev.map((c) => (c._id === msg.data._id ? msg.data : c))
-          );
-        }
+    const cleanup = () => {
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      reconnectRef.current = null;
 
-        if (msg.type === "NEW_COMPLAINT" && msg.data?.user === user._id) {
-          setComplaints((prev) => [msg.data, ...prev]);
-        }
-      } catch (e) {
-        console.error("WS parse error", e);
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch {}
       }
+      wsRef.current = null;
     };
 
-    return () => socket.close();
-  }, [user]);
+    const connect = (attempt = 0) => {
+      if (stopped) return;
 
-  const counts = useMemo(() => {
-    const by = { all: complaints.length };
-    Object.keys(STATUS_CONFIG).forEach((k) => {
-      by[k] = complaints.filter((c) => safeStatus(c.status) === k).length;
-    });
-    return by;
-  }, [complaints]);
+      cleanup();
+
+      let socket;
+      try {
+        socket = new WebSocket(WS_URL);
+      } catch {
+        return;
+      }
+
+      wsRef.current = socket;
+
+      socket.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          const payload = msg?.data;
+          if (!payload) return;
+          if (payload.user && payload.user !== userId) return;
+
+          if (msg.type === "UPDATED_COMPLAINT") {
+            setComplaints((prev) =>
+              prev.map((c) => (c._id === payload._id ? payload : c))
+            );
+          } else if (msg.type === "NEW_COMPLAINT") {
+            setComplaints((prev) => [payload, ...prev]);
+          } else if (msg.type === "DELETED_COMPLAINT") {
+            setComplaints((prev) => prev.filter((c) => c._id !== payload._id));
+          }
+        } catch {}
+      };
+
+      socket.onclose = () => {
+        if (stopped) return;
+        const delay = Math.min(10000, 1000 * Math.pow(2, attempt));
+        reconnectRef.current = setTimeout(() => connect(attempt + 1), delay);
+      };
+
+      socket.onerror = () => {
+        try {
+          socket.close();
+        } catch {}
+      };
+    };
+
+    connect(0);
+
+    return () => {
+      stopped = true;
+      cleanup();
+    };
+  }, [user?._id]);
 
   const stats = useMemo(() => {
-    const total = complaints.length;
-    const pending = complaints.filter(
-      (c) => safeStatus(c.status) === "pending"
-    ).length;
-    const resolved = complaints.filter(
-      (c) => safeStatus(c.status) === "resolved"
-    ).length;
-    const rejected = complaints.filter(
-      (c) => safeStatus(c.status) === "rejected"
-    ).length;
+    let total = 0;
+    let pending = 0;
+    let resolved = 0;
+    let rejected = 0;
+
+    for (const c of complaints) {
+      total += 1;
+      const s = c.status || "pending";
+      if (s === "pending") pending += 1;
+      if (s === "resolved") resolved += 1;
+      if (s === "rejected") rejected += 1;
+    }
+
     return { total, pending, resolved, rejected };
   }, [complaints]);
 
-  const filteredComplaints = useMemo(() => {
-    let result = [...complaints];
+  const filteredData = useMemo(() => {
+    let res = complaints.slice();
 
-    if (filterStatus !== "all") {
-      result = result.filter((c) => safeStatus(c.status) === filterStatus);
-    }
+    if (filter !== "all")
+      res = res.filter((c) => (c.status || "pending") === filter);
 
-    if (debouncedSearch.trim()) {
-      const s = debouncedSearch.toLowerCase();
-      result = result.filter(
+    const q = search.trim().toLowerCase();
+    if (q) {
+      res = res.filter(
         (c) =>
-          c.title?.toLowerCase().includes(s) ||
-          c.description?.toLowerCase().includes(s) ||
-          c._id?.toLowerCase().includes(s) ||
-          c.department?.toLowerCase().includes(s) ||
-          c.category?.toLowerCase().includes(s)
+          c.title?.toLowerCase().includes(q) || c._id?.toLowerCase().includes(q)
       );
     }
 
-    result.sort((a, b) => {
-      const da = new Date(a.createdAt).getTime();
-      const db = new Date(b.createdAt).getTime();
-      return sortBy === "oldest" ? da - db : db - da;
+    res.sort((a, b) => {
+      const tA = new Date(a.createdAt).getTime();
+      const tB = new Date(b.createdAt).getTime();
+      return sort === "oldest" ? tA - tB : tB - tA;
     });
 
-    return result;
-  }, [complaints, filterStatus, debouncedSearch, sortBy]);
+    return res;
+  }, [complaints, filter, search, sort]);
 
-  const onEdit = (id) => navigate(`/complaints/${id}/edit`);
-
-  const onDeleteStart = (id) => {
-    const target = complaints.find((c) => c._id === id);
-    if (target && safeStatus(target.status) !== "pending") {
-      toast.error("You can only delete complaints that are still pending.");
-      return;
-    }
-    setDeleteModal({ isOpen: true, id });
-  };
-
-  const onDeleteConfirm = async () => {
-    if (!deleteModal.id) return;
+  const handleDelete = useCallback(async () => {
+    const id = deleteModal.id;
+    if (!id) return;
 
     setIsDeleting(true);
     try {
-      const target = complaints.find((c) => c._id === deleteModal.id);
-      if (target && safeStatus(target.status) !== "pending") {
-        throw new Error(
-          "You can only delete complaints that are still pending."
-        );
-      }
-
-      await apiClient.delete(`/complaints/${deleteModal.id}`);
-      setComplaints((prev) => prev.filter((c) => c._id !== deleteModal.id));
-      toast.success("Complaint deleted.");
-      setDeleteModal({ isOpen: false, id: null });
+      await apiClient.delete(`/complaints/${id}`);
+      setComplaints((p) => p.filter((c) => c._id !== id));
+      setDeleteModal({ open: false, id: null });
+      TOAST.success("Deleted");
     } catch (err) {
-      toast.error(
-        err?.response?.data?.message ||
-          err?.message ||
-          "Failed to delete complaint."
-      );
+      TOAST.error(err?.response?.data?.message || "Delete failed");
     } finally {
       setIsDeleting(false);
     }
-  };
-
-  const clearFilters = () => {
-    setFilterStatus("all");
-    setSearchTerm("");
-    setSortBy("newest");
-  };
+  }, [deleteModal.id]);
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        {/* Header */}
-        <header className="rounded-3xl border border-gray-200 bg-white shadow-sm p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className="min-h-screen bg-slate-50/50 pb-20 overflow-x-hidden">
+      <div className="bg-white border-b border-slate-200 sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col md:flex-row md:items-center justify-between py-4 gap-4">
             <div>
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 flex items-center gap-2">
-                <FiFileText className="text-blue-600" />
+              <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-3">
+                <span className="p-2 bg-blue-600 rounded-lg shadow-lg shadow-blue-200">
+                  <FiFileText
+                    className="text-white w-5 h-5"
+                    aria-hidden="true"
+                  />
+                </span>
                 My Complaints
               </h1>
-              <p className="mt-1 text-sm text-gray-600">
-                Track progress, edit pending items, and manage your submissions.
+              <p className="mt-1 text-sm text-slate-500">
+                Manage and track your submissions
               </p>
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full sm:w-auto">
-                <StatCard title="Total" value={stats.total} tone="slate" />
-                <StatCard title="Pending" value={stats.pending} tone="amber" />
-                <StatCard
-                  title="Resolved"
-                  value={stats.resolved}
-                  tone="emerald"
-                />
-                <StatCard title="Rejected" value={stats.rejected} tone="rose" />
-              </div>
+            <div className="flex items-center gap-6 bg-slate-50 px-4 py-2 rounded-xl border border-slate-100">
+              <StatItem
+                label="Total"
+                value={stats.total}
+                colorClass="text-slate-900"
+              />
+              <div className="w-px h-8 bg-slate-200" />
+              <StatItem
+                label="Pending"
+                value={stats.pending}
+                colorClass="text-amber-600"
+              />
+              <div className="w-px h-8 bg-slate-200" />
+              <StatItem
+                label="Resolved"
+                value={stats.resolved}
+                colorClass="text-emerald-600"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 space-y-8">
+        <div className="flex flex-col xl:flex-row gap-4 justify-between items-start xl:items-center">
+          <StatusFilters filter={filter} onChange={setFilter} />
+
+          <div className="flex flex-col sm:flex-row gap-3 w-full xl:w-auto">
+            <div className="relative group flex-1 sm:w-80">
+              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+              <input
+                type="text"
+                placeholder="Search complaints..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              >
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+              </select>
 
               <Link
                 to="/complaints/new"
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white hover:bg-blue-700 transition shadow-lg shadow-blue-200"
+                className="flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-sm font-bold rounded-xl shadow-lg shadow-blue-200 transition-all"
               >
-                <FiPlus className="h-5 w-5" />
-                New complaint
+                <FiPlus className="w-5 h-5" aria-hidden="true" />
+                <span className="hidden sm:inline">New Complaint</span>
+                <span className="sm:hidden">New</span>
               </Link>
             </div>
           </div>
-        </header>
+        </div>
 
-        {/* Filters */}
-        <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 space-y-3">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-            <StatusTabs
-              value={filterStatus}
-              onChange={setFilterStatus}
-              counts={counts}
-            />
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100 transition"
-              >
-                Clear
-              </button>
-
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="newest">Newest first</option>
-                <option value="oldest">Oldest first</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="relative">
-            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search title, description, ID, category, department..."
-              className="w-full rounded-xl border border-gray-200 bg-white pl-10 pr-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-        </section>
-
-        {/* Content */}
         {loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {Array.from({ length: 6 }).map((_, i) => (
-              <SkeletonCard key={i} />
+              <div
+                key={i}
+                className="h-48 bg-white rounded-2xl border border-slate-200 p-5 animate-pulse"
+              >
+                <div className="flex justify-between">
+                  <div className="w-20 h-6 bg-slate-100 rounded-full" />
+                  <div className="w-8 h-8 bg-slate-100 rounded-lg" />
+                </div>
+                <div className="mt-4 w-3/4 h-6 bg-slate-100 rounded-md" />
+                <div className="mt-3 w-full h-4 bg-slate-100 rounded-md" />
+                <div className="mt-2 w-2/3 h-4 bg-slate-100 rounded-md" />
+              </div>
             ))}
           </div>
-        ) : loadError ? (
-          <div className="rounded-3xl border border-rose-200 bg-rose-50 p-10 text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-white border border-rose-200">
-              <FiAlertCircle className="h-7 w-7 text-rose-600" />
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center py-20 bg-white rounded-3xl border border-rose-100">
+            <div className="p-4 bg-rose-50 rounded-full mb-4">
+              <FiAlertCircle
+                className="w-8 h-8 text-rose-500"
+                aria-hidden="true"
+              />
             </div>
-            <h3 className="text-lg font-bold text-rose-900">{loadError}</h3>
-            <p className="mt-1 text-sm text-rose-800">
-              Try again or check your connection.
+            <h3 className="text-lg font-bold text-slate-900">{error}</h3>
+            <button
+              type="button"
+              onClick={fetchComplaints}
+              className="mt-4 px-6 py-2 bg-white border border-slate-200 rounded-lg text-sm font-semibold hover:bg-slate-50"
+            >
+              Try Again
+            </button>
+          </div>
+        ) : filteredData.length === 0 ? (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col items-center justify-center py-24 bg-white rounded-3xl border border-dashed border-slate-300"
+          >
+            <div className="p-6 bg-slate-50 rounded-full mb-6">
+              <FiFilter
+                className="w-10 h-10 text-slate-400"
+                aria-hidden="true"
+              />
+            </div>
+            <h3 className="text-xl font-bold text-slate-900">
+              No complaints found
+            </h3>
+            <p className="text-slate-500 mt-2 max-w-xs text-center">
+              No results for the current filters.
             </p>
             <button
               type="button"
-              onClick={load}
-              className="mt-4 rounded-2xl bg-rose-600 px-5 py-3 text-sm font-bold text-white hover:bg-rose-700 transition"
+              onClick={() => {
+                setFilter("all");
+                setSearch("");
+              }}
+              className="mt-6 text-blue-600 font-semibold text-sm hover:underline"
             >
-              Retry
+              Clear filters
             </button>
-          </div>
+          </motion.div>
         ) : (
-          <AnimatePresence mode="wait">
-            {filteredComplaints.length === 0 ? (
-              <motion.div
-                key="empty"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="rounded-3xl border border-dashed border-gray-300 bg-white p-14 text-center"
-              >
-                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-50 border border-gray-200">
-                  <FiAlertCircle className="h-7 w-7 text-gray-400" />
-                </div>
-                <h3 className="text-lg font-bold text-gray-900">
-                  No complaints found
-                </h3>
-                <p className="mt-1 text-sm text-gray-600">
-                  Try clearing filters or create a new complaint.
-                </p>
-                <div className="mt-5 flex items-center justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={clearFilters}
-                    className="rounded-2xl border border-gray-200 bg-gray-50 px-5 py-3 text-sm font-bold text-gray-800 hover:bg-gray-100 transition"
-                  >
-                    Clear filters
-                  </button>
-                  <Link
-                    to="/complaints/new"
-                    className="rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white hover:bg-blue-700 transition"
-                  >
-                    Create complaint
-                  </Link>
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="grid"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-              >
-                {filteredComplaints.map((c) => (
-                  <ComplaintCard
-                    key={c._id}
-                    complaint={c}
-                    onEdit={onEdit}
-                    onDelete={onDeleteStart}
-                  />
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <motion.div
+            variants={VARIANTS.container}
+            initial="hidden"
+            animate="show"
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+          >
+            {filteredData.map((item) => (
+              <ComplaintCard
+                key={item._id}
+                data={item}
+                onEdit={(id) => navigate(`/complaints/${id}/edit`)}
+                onDelete={(id) => setDeleteModal({ open: true, id })}
+              />
+            ))}
+          </motion.div>
         )}
-      </div>
+      </main>
 
       <DeleteModal
-        isOpen={deleteModal.isOpen}
-        onClose={() => setDeleteModal({ isOpen: false, id: null })}
-        onConfirm={onDeleteConfirm}
+        isOpen={deleteModal.open}
+        onClose={() => setDeleteModal({ open: false, id: null })}
+        onConfirm={handleDelete}
         isDeleting={isDeleting}
       />
-    </main>
+    </div>
   );
 }

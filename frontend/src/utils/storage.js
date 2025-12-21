@@ -1,35 +1,32 @@
-// src/utils/storage.js
-
 const APP_PREFIX = "cms_v1_";
 
 export const STORAGE_KEYS = Object.freeze({
   AUTH_TOKEN: `${APP_PREFIX}auth_token`,
   REFRESH_TOKEN: `${APP_PREFIX}refresh_token`,
   USER_DATA: `${APP_PREFIX}user_data`,
-
   THEME: `${APP_PREFIX}theme`,
   LANGUAGE: `${APP_PREFIX}language`,
   PREFERENCES: `${APP_PREFIX}preferences`,
-
   AVATAR_PREVIEW: `${APP_PREFIX}avatar_preview`,
   COVER_PREVIEW: `${APP_PREFIX}cover_preview`,
   TEMP_FILES: `${APP_PREFIX}temp_files`,
-
   CACHE_PREFIX: `${APP_PREFIX}cache_`,
   LAST_SYNC: `${APP_PREFIX}last_sync`,
 });
 
 const AUTH_EVENT = `${APP_PREFIX}auth_changed`;
 
+const hasWindow = typeof window !== "undefined";
+
 export const emitAuthChanged = (detail = {}) => {
+  if (!hasWindow) return;
   try {
     window.dispatchEvent(new CustomEvent(AUTH_EVENT, { detail }));
-  } catch {
-    // ignore
-  }
+  } catch {}
 };
 
 export const onAuthChanged = (handler) => {
+  if (!hasWindow) return () => {};
   const listener = (e) => handler?.(e.detail);
   window.addEventListener(AUTH_EVENT, listener);
   return () => window.removeEventListener(AUTH_EVENT, listener);
@@ -56,20 +53,22 @@ const createSafeStorage = (engine) => {
   }
 };
 
-const safeLocal = createSafeStorage(window.localStorage);
-const safeSession = createSafeStorage(window.sessionStorage);
+const safeLocal = createSafeStorage(
+  hasWindow ? window.localStorage : createSafeStorage({})
+);
+const safeSession = createSafeStorage(
+  hasWindow ? window.sessionStorage : createSafeStorage({})
+);
 
 const createStore = (engine) => ({
-  get(key, defaultValue = null) {
+  get(key, def = null) {
     try {
       const raw = engine.getItem(key);
-      if (raw == null) return defaultValue;
-      return JSON.parse(raw);
+      return raw == null ? def : JSON.parse(raw);
     } catch {
-      return defaultValue;
+      return def;
     }
   },
-
   set(key, value) {
     try {
       engine.setItem(key, JSON.stringify(value));
@@ -78,7 +77,6 @@ const createStore = (engine) => ({
       return false;
     }
   },
-
   remove(key) {
     try {
       engine.removeItem(key);
@@ -87,18 +85,15 @@ const createStore = (engine) => ({
       return false;
     }
   },
-
   clearAllAppKeys() {
     try {
-      const toRemove = [];
+      const keys = [];
       for (let i = 0; i < engine.length; i += 1) {
         const k = engine.key(i);
-        if (k && k.startsWith(APP_PREFIX)) toRemove.push(k);
+        if (k && k.startsWith(APP_PREFIX)) keys.push(k);
       }
-      toRemove.forEach((k) => engine.removeItem(k));
-    } catch {
-      // ignore
-    }
+      keys.forEach((k) => engine.removeItem(k));
+    } catch {}
   },
 });
 
@@ -118,85 +113,14 @@ const isPlainObject = (v) => v && typeof v === "object" && !Array.isArray(v);
 const mergeUser = (prev, next) => {
   if (!prev) return next;
   if (!next) return next;
-
   const merged = { ...prev, ...next };
-
-  // keep existing coverId if next doesn't have it
   if (next.coverId === undefined && prev.coverId !== undefined)
     merged.coverId = prev.coverId;
-
   return merged;
 };
 
-export const TokenManager = {
-  get() {
-    return normalizeToken(localStorageService.get(STORAGE_KEYS.AUTH_TOKEN));
-  },
-
-  set(token) {
-    if (!token) {
-      localStorageService.remove(STORAGE_KEYS.AUTH_TOKEN);
-      emitAuthChanged({ type: "ACCESS_TOKEN_CLEARED" });
-      return true;
-    }
-    if (typeof token !== "string") return false;
-
-    const ok = localStorageService.set(STORAGE_KEYS.AUTH_TOKEN, { token });
-    if (ok) emitAuthChanged({ type: "ACCESS_TOKEN_SET" });
-    return ok;
-  },
-
-  remove() {
-    const ok = localStorageService.remove(STORAGE_KEYS.AUTH_TOKEN);
-    if (ok) emitAuthChanged({ type: "ACCESS_TOKEN_CLEARED" });
-    return ok;
-  },
-
-  getRefresh() {
-    return normalizeToken(localStorageService.get(STORAGE_KEYS.REFRESH_TOKEN));
-  },
-
-  setRefresh(token) {
-    if (!token) {
-      localStorageService.remove(STORAGE_KEYS.REFRESH_TOKEN);
-      emitAuthChanged({ type: "REFRESH_TOKEN_CLEARED" });
-      return true;
-    }
-    if (typeof token !== "string") return false;
-
-    const ok = localStorageService.set(STORAGE_KEYS.REFRESH_TOKEN, { token });
-    if (ok) emitAuthChanged({ type: "REFRESH_TOKEN_SET" });
-    return ok;
-  },
-
-  removeRefresh() {
-    const ok = localStorageService.remove(STORAGE_KEYS.REFRESH_TOKEN);
-    if (ok) emitAuthChanged({ type: "REFRESH_TOKEN_CLEARED" });
-    return ok;
-  },
-
-  exists() {
-    return Boolean(TokenManager.get());
-  },
-
-  clearAll() {
-    TokenManager.remove();
-    TokenManager.removeRefresh();
-  },
-
-  getUser() {
-    return UserManager.get();
-  },
-  setUser(user) {
-    return UserManager.set(user);
-  },
-};
-
 export const UserManager = {
-  get() {
-    return localStorageService.get(STORAGE_KEYS.USER_DATA);
-  },
-
+  get: () => localStorageService.get(STORAGE_KEYS.USER_DATA),
   set(user) {
     if (!user) {
       localStorageService.remove(STORAGE_KEYS.USER_DATA);
@@ -204,48 +128,74 @@ export const UserManager = {
       return true;
     }
     if (!isPlainObject(user)) return false;
-
     const current = UserManager.get();
     const next = mergeUser(current, user);
-
-    if (next?.coverId === undefined) {
-      console.warn("[UserManager.set] stored user has no coverId:", next);
-    }
-
     const ok = localStorageService.set(STORAGE_KEYS.USER_DATA, next);
     if (ok) emitAuthChanged({ type: "USER_SET" });
     return ok;
   },
+  update: (updates) => UserManager.set(updates),
+  remove: () => UserManager.set(null),
+  exists: () => Boolean(UserManager.get()),
+  getRole: () => UserManager.get()?.role ?? null,
+};
 
-  update(updates) {
-    return UserManager.set(updates);
+export const TokenManager = {
+  get: () => normalizeToken(localStorageService.get(STORAGE_KEYS.AUTH_TOKEN)),
+  set(token) {
+    if (!token) {
+      localStorageService.remove(STORAGE_KEYS.AUTH_TOKEN);
+      emitAuthChanged({ type: "ACCESS_TOKEN_CLEARED" });
+      return true;
+    }
+    if (typeof token !== "string") return false;
+    const ok = localStorageService.set(STORAGE_KEYS.AUTH_TOKEN, { token });
+    if (ok) emitAuthChanged({ type: "ACCESS_TOKEN_SET" });
+    return ok;
   },
-
   remove() {
-    return UserManager.set(null);
+    const ok = localStorageService.remove(STORAGE_KEYS.AUTH_TOKEN);
+    if (ok) emitAuthChanged({ type: "ACCESS_TOKEN_CLEARED" });
+    return ok;
   },
-
-  exists() {
-    return Boolean(UserManager.get());
+  getRefresh: () =>
+    normalizeToken(localStorageService.get(STORAGE_KEYS.REFRESH_TOKEN)),
+  setRefresh(token) {
+    if (!token) {
+      localStorageService.remove(STORAGE_KEYS.REFRESH_TOKEN);
+      emitAuthChanged({ type: "REFRESH_TOKEN_CLEARED" });
+      return true;
+    }
+    if (typeof token !== "string") return false;
+    const ok = localStorageService.set(STORAGE_KEYS.REFRESH_TOKEN, { token });
+    if (ok) emitAuthChanged({ type: "REFRESH_TOKEN_SET" });
+    return ok;
   },
-
-  getRole() {
-    return UserManager.get()?.role ?? null;
+  removeRefresh() {
+    const ok = localStorageService.remove(STORAGE_KEYS.REFRESH_TOKEN);
+    if (ok) emitAuthChanged({ type: "REFRESH_TOKEN_CLEARED" });
+    return ok;
   },
+  exists: () => Boolean(TokenManager.get()),
+  clearAll() {
+    TokenManager.remove();
+    TokenManager.removeRefresh();
+  },
+  getUser: () => UserManager.get(),
+  setUser: (u) => UserManager.set(u),
 };
 
 export const FileManager = {
-  async fileToBase64(file) {
+  fileToBase64(file) {
     return new Promise((resolve, reject) => {
       if (!file || !(file instanceof File))
         return reject(new Error("Invalid file"));
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
-      reader.onerror = (e) => reject(e);
+      reader.onerror = reject;
       reader.readAsDataURL(file);
     });
   },
-
   async setAvatarPreview(file) {
     try {
       const url = await FileManager.fileToBase64(file);
@@ -259,12 +209,9 @@ export const FileManager = {
       return false;
     }
   },
-  getAvatarPreview() {
-    return localStorageService.get(STORAGE_KEYS.AVATAR_PREVIEW);
-  },
-  removeAvatarPreview() {
-    return localStorageService.remove(STORAGE_KEYS.AVATAR_PREVIEW);
-  },
+  getAvatarPreview: () => localStorageService.get(STORAGE_KEYS.AVATAR_PREVIEW),
+  removeAvatarPreview: () =>
+    localStorageService.remove(STORAGE_KEYS.AVATAR_PREVIEW),
 
   async setCoverPreview(file) {
     try {
@@ -279,12 +226,9 @@ export const FileManager = {
       return false;
     }
   },
-  getCoverPreview() {
-    return localStorageService.get(STORAGE_KEYS.COVER_PREVIEW);
-  },
-  removeCoverPreview() {
-    return localStorageService.remove(STORAGE_KEYS.COVER_PREVIEW);
-  },
+  getCoverPreview: () => localStorageService.get(STORAGE_KEYS.COVER_PREVIEW),
+  removeCoverPreview: () =>
+    localStorageService.remove(STORAGE_KEYS.COVER_PREVIEW),
 
   async setFilePreviews(files) {
     if (!Array.isArray(files)) return false;
@@ -303,12 +247,8 @@ export const FileManager = {
       return false;
     }
   },
-  getFilePreviews() {
-    return localStorageService.get(STORAGE_KEYS.TEMP_FILES, []);
-  },
-  clearFilePreviews() {
-    return localStorageService.remove(STORAGE_KEYS.TEMP_FILES);
-  },
+  getFilePreviews: () => localStorageService.get(STORAGE_KEYS.TEMP_FILES, []),
+  clearFilePreviews: () => localStorageService.remove(STORAGE_KEYS.TEMP_FILES),
 
   clearPreviews() {
     FileManager.removeAvatarPreview();
@@ -323,11 +263,9 @@ export const PreferencesManager = {
     localStorageService.set(STORAGE_KEYS.PREFERENCES, prefs || {}),
   update: (updates) =>
     PreferencesManager.set({ ...PreferencesManager.get(), ...(updates || {}) }),
-
   getTheme: () => localStorageService.get(STORAGE_KEYS.THEME, "light"),
   setTheme: (theme) =>
     theme ? localStorageService.set(STORAGE_KEYS.THEME, theme) : false,
-
   getLanguage: () => localStorageService.get(STORAGE_KEYS.LANGUAGE, "en"),
   setLanguage: (lang) =>
     lang ? localStorageService.set(STORAGE_KEYS.LANGUAGE, lang) : false,
@@ -340,7 +278,6 @@ export const CacheManager = {
     localStorageService.get(`${STORAGE_KEYS.CACHE_PREFIX}${key}`, def),
   remove: (key) =>
     localStorageService.remove(`${STORAGE_KEYS.CACHE_PREFIX}${key}`),
-
   setLastSync: () =>
     localStorageService.set(STORAGE_KEYS.LAST_SYNC, Date.now()),
   getLastSync: () => localStorageService.get(STORAGE_KEYS.LAST_SYNC),
@@ -357,16 +294,15 @@ export const clearAuth = () => {
     safeLocal.removeItem("user");
     safeLocal.removeItem("userRole");
     safeLocal.removeItem("userName");
-  } catch {
-    // ignore
-  }
+  } catch {}
 
   emitAuthChanged({ type: "AUTH_CLEARED" });
 };
 
 export const getUserRole = () => UserManager.getRole();
 export const hasRole = (role) => getUserRole() === role;
-export const hasAnyRole = (roles) => roles.includes(getUserRole());
+export const hasAnyRole = (roles = []) =>
+  Array.isArray(roles) && roles.includes(getUserRole());
 export const isAuthenticated = () =>
   TokenManager.exists() && UserManager.exists();
 

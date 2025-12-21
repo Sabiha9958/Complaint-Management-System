@@ -7,7 +7,7 @@ import { useAuth } from "../../context/AuthContext";
 import ProfileHeader from "../../components/Profile/ProfileHeader";
 import ProfileInfo from "../../components/Profile/ProfileInfo";
 import ProfileBio from "../../components/Profile/ProfileBio";
-import ProfileSidebar from "../../components/profile/ProfileSidebar";
+import ProfileSidebar from "../../components/Profile/ProfileSidebar";
 
 import CoverSelector from "../../components/Profile/CoverSelector";
 import CoverDisplay from "../../components/Profile/CoverDisplay";

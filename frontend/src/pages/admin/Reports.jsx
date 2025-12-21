@@ -6,8 +6,8 @@ import TrendChart from "../../components/Reports/TrendChart.jsx";
 import CategoryBar from "../../components/Reports/CategoryBar.jsx";
 import StatusDonut from "../../components/Reports/StatusDonut.jsx";
 import InsightsPanel from "../../components/Reports/InsightsPanel.jsx";
-import { exportComplaintsCsv } from "../../components/reports/exportCsv.js";
-import { useReportsData } from "../../components/reports/useReportsData.js";
+import { exportComplaintsCsv } from "../../components/Reports/exportCsv.js";
+import { useReportsData } from "../../components/Reports/useReportsData.js";
 
 export default function Reports() {
   const [dateRangeDays, setDateRangeDays] = useState(90);

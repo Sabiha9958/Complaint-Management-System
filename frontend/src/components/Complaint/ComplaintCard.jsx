@@ -1,314 +1,271 @@
-import React, { memo, useMemo, useCallback } from "react";
+import React, { memo, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  FiClock,
-  FiHash,
-  FiTag,
-  FiFlag,
-  FiCheckCircle,
-  FiMessageSquare,
-  FiAlertCircle,
-  FiEdit3,
-} from "react-icons/fi";
-import {
-  CATEGORY_LABELS,
-  PRIORITY_LABELS,
-  STATUS_LABELS,
-  getPriorityStyle,
-  getStatusStyle,
-} from "../../utils/constants";
+  Clock,
+  MessageSquare,
+  Paperclip,
+  MoreHorizontal,
+  Hash,
+  AlertCircle,
+  CheckCircle2,
+  ArrowUpCircle,
+  Siren,
+  Tag,
+  Copy,
+  CalendarDays,
+  ChevronRight,
+} from "lucide-react";
+import { clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
 
-const cx = (...c) => c.filter(Boolean).join(" ");
+// --- Utils ---
+export function cn(...inputs) {
+  return twMerge(clsx(inputs));
+}
 
-const safeStr = (v, fallback = "—") =>
-  v == null || v === "" ? fallback : String(v);
-const clamp = (text, max = 120) => {
-  const s = String(text || "").trim();
-  return s.length > max ? `${s.slice(0, max).trim()}…` : s;
+const formatRelativeTime = (dateString) => {
+  if (!dateString) return "";
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffInSeconds = Math.floor((now - date) / 1000);
+  if (diffInSeconds < 60) return "Just now";
+  if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+  if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
 
-const formatDateShort = (iso) => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+// --- Configuration ---
+
+// Centralized Design System for Priorities
+const PRIORITY_THEME = {
+  urgent: {
+    label: "Critical",
+    color: "rose",
+    icon: Siren,
+    styles: "bg-rose-50 border-l-rose-500 hover:border-rose-300",
+    badge: "bg-rose-100 text-rose-700 border-rose-200",
+    iconColor: "text-rose-600",
+  },
+  high: {
+    label: "High",
+    color: "orange",
+    icon: ArrowUpCircle,
+    styles: "bg-orange-50/50 border-l-orange-500 hover:border-orange-300",
+    badge: "bg-orange-100 text-orange-700 border-orange-200",
+    iconColor: "text-orange-600",
+  },
+  medium: {
+    label: "Medium",
+    color: "amber",
+    icon: AlertCircle,
+    styles: "bg-amber-50/50 border-l-amber-400 hover:border-amber-300",
+    badge: "bg-amber-100 text-amber-700 border-amber-200",
+    iconColor: "text-amber-600",
+  },
+  low: {
+    label: "Low",
+    color: "slate",
+    icon: CheckCircle2,
+    styles: "bg-white border-l-slate-300 hover:border-slate-400",
+    badge: "bg-slate-100 text-slate-600 border-slate-200",
+    iconColor: "text-slate-500",
+  },
 };
 
-const formatRelative = (iso) => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  const diff = Date.now() - d.getTime();
-  const m = Math.floor(diff / 60000);
-  const h = Math.floor(m / 60);
-  const days = Math.floor(h / 24);
-  if (m < 1) return "Just now";
-  if (m < 60) return `${m}m ago`;
-  if (h < 24) return `${h}h ago`;
-  if (days < 7) return `${days}d ago`;
-  return formatDateShort(iso);
+// Status Design System
+const STATUS_THEME = {
+  pending: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  "in-progress": "bg-blue-100 text-blue-700 border-blue-200",
+  resolved: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  closed: "bg-slate-100 text-slate-600 border-slate-200",
 };
 
-const initials = (name) => {
-  const s = String(name || "").trim();
-  if (!s) return "?";
-  return s
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase())
-    .join("");
-};
+// --- Sub-Components ---
 
-const Badge = ({ children, className = "" }) => (
-  <span
-    className={cx(
-      "inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider",
-      className
-    )}
-  >
-    {children}
-  </span>
-);
-
-const StatusBadge = ({ status }) => {
-  const style = getStatusStyle(status);
-  const label = STATUS_LABELS?.[status] || safeStr(status, "Pending");
-  const dot = style?.text ? style.text.replace("text-", "bg-") : "bg-gray-400";
-
+const UserInfo = ({ name, email }) => {
+  const initials = (name || "?").slice(0, 2).toUpperCase();
   return (
-    <Badge className={cx("border-2", style?.bg, style?.text, style?.border)}>
-      <span className={cx("h-1.5 w-1.5 rounded-full", dot)} />
-      {label}
-    </Badge>
+    <div className="flex items-center gap-2.5">
+      <div className="h-8 w-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-bold ring-2 ring-white shadow-sm">
+        {initials}
+      </div>
+      <div className="flex flex-col">
+        <span className="text-xs font-bold text-slate-700">{name}</span>
+        <span className="text-[10px] text-slate-400 max-w-[120px] truncate">
+          {email}
+        </span>
+      </div>
+    </div>
   );
 };
 
-const PriorityBadge = ({ priority }) => {
-  const style = getPriorityStyle(priority);
-  const label = PRIORITY_LABELS?.[priority] || safeStr(priority, "Low");
-
-  return (
-    <Badge className={cx("border-2", style?.bg, style?.text, style?.border)}>
-      <FiFlag className="h-3 w-3" />
-      {label}
-    </Badge>
-  );
-};
-
-const CategoryBadge = ({ category }) => {
-  const label = CATEGORY_LABELS?.[category] || safeStr(category);
-  return (
-    <Badge className="border-2 border-gray-200 bg-gray-100 text-gray-700">
-      <FiTag className="h-3 w-3" />
-      {label}
-    </Badge>
-  );
-};
-
-const Avatar = ({ name }) => (
-  <div
-    className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-600 to-blue-500 text-xs font-black text-white shadow-sm ring-1 ring-black/5"
-    title={safeStr(name, "User")}
-  >
-    {initials(name)}
+const CategoryBadge = ({ category }) => (
+  <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white border border-slate-200 shadow-sm">
+    <Tag className="w-3 h-3 text-indigo-500" />
+    <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide">
+      {category || "General"}
+    </span>
   </div>
 );
 
-const EmptyCard = memo(function EmptyCard() {
-  return (
-    <div className="flex h-full min-h-[220px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-300 bg-gray-50 p-8 text-center">
-      <FiAlertCircle className="mb-2 h-9 w-9 text-gray-400" />
-      <p className="text-sm font-semibold text-gray-600">No data</p>
-      <p className="mt-1 text-xs text-gray-500">
-        Complaint information unavailable.
-      </p>
-    </div>
-  );
-});
+// --- Main Component ---
 
-const ComplaintCard = memo(function ComplaintCard({
-  complaint,
-  to, // (complaint) => string OR string
-  onUpdateStatus, // (complaint) => void
-  canUpdateStatus = false, // pass from parent based on role
-}) {
+const ComplaintCard = ({ complaint, onUpdateStatus, className }) => {
   const navigate = useNavigate();
+  const [copied, setCopied] = useState(false);
 
-  const href = useMemo(() => {
-    if (to) return typeof to === "function" ? to(complaint) : to;
-    return complaint?._id ? `/complaints/${complaint._id}` : "#";
-  }, [complaint, to]);
-
-  const ui = useMemo(() => {
+  // Normalize Data
+  const data = useMemo(() => {
     if (!complaint) return null;
-
-    const id = complaint._id || complaint.complaintId;
-    const shortId = id ? String(id).slice(-8).toUpperCase() : "—";
-
-    const title = safeStr(complaint.title, "Untitled complaint");
-    const description =
-      clamp(complaint.description, 120) || "No description provided.";
-    const createdAt = complaint.createdAt || null;
-
-    const name =
-      complaint.contactInfo?.name ||
-      complaint.user?.name ||
-      complaint.createdBy?.name ||
-      "Anonymous";
-
-    const email =
-      complaint.contactInfo?.email ||
-      complaint.user?.email ||
-      complaint.createdBy?.email ||
-      "";
-
-    const assigned = Boolean(complaint.assignedTo);
-    const commentsCount = Number(complaint.commentsCount || 0);
-
     return {
-      shortId,
-      title,
-      description,
-      createdAt,
-      name,
-      email,
-      assigned,
-      commentsCount,
+      id: complaint._id || complaint.id,
+      shortId: (complaint._id || complaint.id || "").slice(-6).toUpperCase(),
+      title: complaint.title || "Untitled Issue",
+      desc: complaint.description || "No details provided.",
+      category: complaint.category || "General",
+      priority: (complaint.priority || "low").toLowerCase(),
+      status: (complaint.status || "pending").toLowerCase(),
+      created: complaint.createdAt,
+      author: {
+        name: complaint.user?.name || "Anonymous",
+        email: complaint.user?.email || "",
+      },
+      metrics: {
+        comments: complaint.commentsCount || 0,
+        files: complaint.attachments?.length || 0,
+      },
     };
   }, [complaint]);
 
-  const onCardClick = useCallback(() => {
-    if (href && href !== "#") navigate(href);
-  }, [href, navigate]);
+  if (!data) return null;
 
-  const onStatusClick = useCallback(
-    (e) => {
-      e.preventDefault();
-      e.stopPropagation(); // prevent navigation from card click
-      onUpdateStatus?.(complaint);
-    },
-    [onUpdateStatus, complaint]
-  );
+  // Get Theme based on Priority
+  const theme = PRIORITY_THEME[data.priority] || PRIORITY_THEME.low;
+  const PriorityIcon = theme.icon;
 
-  if (!complaint || !ui) return <EmptyCard />;
+  const handleCopyId = (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(data.id);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
-    <article
-      role="button"
-      tabIndex={0}
-      onClick={onCardClick}
-      onKeyDown={(e) =>
-        e.key === "Enter" || e.key === " " ? onCardClick() : null
-      }
-      className={cx(
-        "relative h-full overflow-hidden rounded-2xl border-2 border-gray-100 bg-white p-5 shadow-sm",
-        "transition-all duration-300 hover:-translate-y-1 hover:border-blue-300 hover:shadow-xl active:translate-y-0",
-        "focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
+    <div
+      onClick={() => navigate(`/admin/complaints/${data.id}`)}
+      className={cn(
+        "group relative flex flex-col w-full bg-white rounded-xl shadow-sm border border-slate-200 transition-all duration-300",
+        "hover:shadow-md hover:-translate-y-1 cursor-pointer overflow-hidden",
+        // The thick colored border on the left
+        `border-l-4 ${theme.styles.split(" ")[1]}`,
+        className
       )}
-      aria-label={`Open complaint: ${ui.title}`}
     >
-      <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 hover:opacity-100">
-        <div className="absolute -top-24 -right-24 h-48 w-48 rounded-full bg-blue-200/40 blur-3xl" />
-        <div className="absolute -bottom-24 -left-24 h-48 w-48 rounded-full bg-indigo-200/30 blur-3xl" />
+      {/* Top Meta Row */}
+      <div className="px-5 pt-4 pb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {/* ID Badge */}
+          <div
+            onClick={handleCopyId}
+            className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-50 border border-slate-200 text-[10px] font-mono font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+            title="Copy ID"
+          >
+            <Hash className="w-3 h-3" />
+            {data.shortId}
+            {copied ? (
+              <span className="text-emerald-500 font-bold">✓</span>
+            ) : (
+              <Copy className="w-2.5 h-2.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+            )}
+          </div>
+
+          <CategoryBadge category={data.category} />
+        </div>
+
+        {/* Priority Badge */}
+        <div
+          className={cn(
+            "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase tracking-wider",
+            theme.badge
+          )}
+        >
+          <PriorityIcon className="w-3.5 h-3.5" />
+          {theme.label}
+        </div>
       </div>
 
-      <div className="relative">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-1.5">
-            <FiHash className="h-3.5 w-3.5 text-gray-500" />
-            <span className="text-xs font-black text-gray-700">
-              {ui.shortId}
-            </span>
+      {/* Content Section */}
+      <div className="px-5 py-2 flex-1">
+        <h3 className="font-bold text-slate-800 text-base mb-1.5 line-clamp-1 group-hover:text-indigo-600 transition-colors">
+          {data.title}
+        </h3>
+        <p className="text-slate-500 text-xs leading-relaxed line-clamp-2">
+          {data.desc}
+        </p>
+      </div>
+
+      {/* Metrics & Date Divider */}
+      <div className="px-5 mt-2">
+        <div className="h-px bg-slate-100 w-full" />
+      </div>
+
+      {/* Metrics Row */}
+      <div className="px-5 py-2 flex items-center gap-4">
+        <div className="flex items-center gap-3 text-slate-400">
+          {/* Comments */}
+          <div
+            className={cn(
+              "flex items-center gap-1.5 text-xs transition-colors",
+              data.metrics.comments > 0 ? "text-slate-600" : ""
+            )}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span className="font-medium">{data.metrics.comments}</span>
           </div>
-
-          <div className="flex items-center gap-2 text-xs text-gray-500">
-            <FiClock className="h-3.5 w-3.5" />
-            <time
-              dateTime={ui.createdAt || undefined}
-              title={formatDateShort(ui.createdAt)}
-              className="font-semibold"
-            >
-              {formatRelative(ui.createdAt)}
-            </time>
-          </div>
-        </div>
-
-        <div className="mb-4">
-          <h3 className="mb-2 line-clamp-2 text-base font-black leading-tight text-gray-900">
-            {ui.title}
-          </h3>
-          <p className="line-clamp-2 text-sm leading-relaxed text-gray-600">
-            {ui.description}
-          </p>
-        </div>
-
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <StatusBadge status={complaint.status} />
-          <PriorityBadge priority={complaint.priority} />
-          {complaint.category ? (
-            <CategoryBadge category={complaint.category} />
-          ) : null}
-
-          {canUpdateStatus ? (
-            <button
-              type="button"
-              onClick={onStatusClick}
-              className="ml-auto inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-extrabold text-slate-700 hover:bg-slate-50"
-              aria-label="Update complaint status"
-            >
-              <FiEdit3 className="h-3.5 w-3.5" />
-              Update
-            </button>
-          ) : null}
-        </div>
-
-        <div className="flex items-center justify-between gap-3 border-t-2 border-gray-100 pt-4">
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <Avatar name={ui.name} />
-            <div className="min-w-0">
-              <p className="truncate text-xs font-black text-gray-800">
-                {ui.name}
-              </p>
-              {ui.email ? (
-                <p className="truncate text-[11px] font-medium text-gray-500">
-                  {ui.email}
-                </p>
-              ) : null}
-            </div>
-          </div>
-
-          {ui.assigned ? (
-            <div className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-700">
-              <FiCheckCircle className="h-3.5 w-3.5" />
-              <span className="text-[10px] font-black uppercase tracking-wider">
-                Assigned
-              </span>
-            </div>
-          ) : (
-            <div className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-1 text-gray-600">
-              <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
-              <span className="text-[10px] font-black uppercase tracking-wider">
-                Unassigned
-              </span>
+          {/* Attachments */}
+          {data.metrics.files > 0 && (
+            <div className="flex items-center gap-1.5 text-xs text-slate-600">
+              <Paperclip className="w-3.5 h-3.5" />
+              <span className="font-medium">{data.metrics.files}</span>
             </div>
           )}
         </div>
 
-        {ui.commentsCount > 0 ? (
-          <div className="mt-3 flex items-center gap-2 border-t border-gray-100 pt-3 text-xs text-gray-500">
-            <FiMessageSquare className="h-3.5 w-3.5" />
-            <span className="font-semibold">
-              {ui.commentsCount} comment{ui.commentsCount > 1 ? "s" : ""}
-            </span>
-          </div>
-        ) : null}
+        <div className="ml-auto flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+          <CalendarDays className="w-3.5 h-3.5" />
+          {formatRelativeTime(data.created)}
+        </div>
       </div>
-    </article>
-  );
-});
 
-export default ComplaintCard;
+      {/* Footer / Actions */}
+      <div className="bg-slate-50/80 px-5 py-3 flex items-center justify-between border-t border-slate-100 group-hover:bg-slate-50 transition-colors">
+        <UserInfo name={data.author.name} email={data.author.email} />
+
+        <div className="flex items-center gap-3">
+          {/* Status Pill */}
+          <div
+            className={cn(
+              "px-2.5 py-1 rounded-md text-[10px] font-bold uppercase border shadow-sm",
+              STATUS_THEME[data.status] || STATUS_THEME.pending
+            )}
+          >
+            {data.status.replace("-", " ")}
+          </div>
+
+          {/* Action Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onUpdateStatus && onUpdateStatus(complaint);
+            }}
+            className="p-1.5 rounded-md hover:bg-white hover:shadow-sm hover:text-indigo-600 text-slate-400 transition-all border border-transparent hover:border-slate-200"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default memo(ComplaintCard);

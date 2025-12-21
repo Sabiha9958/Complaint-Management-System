@@ -2,7 +2,7 @@
 
 const TOKEN_CONFIG = {
   ACCESS_TOKEN: {
-    EXPIRY: process.env.JWT_EXPIRES_IN || "15m",
+    EXPIRY: process.env.JWT_EXPIRES_IN || "30d",
     SECRET_ENV_KEY: "JWT_SECRET",
   },
   REFRESH_TOKEN: {

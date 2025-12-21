@@ -1,21 +1,27 @@
-// src/api/apiClient.js
 import axios from "axios";
 import { TokenManager, clearAuth } from "../utils/storage";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const ROOT_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+if (!ROOT_URL) throw new Error("Missing VITE_API_URL");
 
-// IMPORTANT: VITE_API_URL should be "http://localhost:5000" (no /api)
+export const API_BASE_URL = `${ROOT_URL}/api`;
+export const FILE_BASE_URL = ROOT_URL;
+
+export const fileUrl = (p) => {
+  if (!p) return "";
+  if (/^https?:\/\//i.test(p)) return p;
+  return `${FILE_BASE_URL}${p.startsWith("/") ? "" : "/"}${p}`;
+};
+
 const api = axios.create({
-  baseURL: `${API_BASE_URL}/api`,
+  baseURL: API_BASE_URL,
   timeout: 30000,
   withCredentials: true,
 });
 
-// ---------- header helpers ----------
 const setHeader = (headers, key, value) => {
   if (!headers) return;
-  if (typeof headers.set === "function")
-    headers.set(key, value); // AxiosHeaders (v1+)
+  if (typeof headers.set === "function") headers.set(key, value);
   else headers[key] = value;
 };
 
@@ -25,17 +31,14 @@ const deleteHeader = (headers, key) => {
   else delete headers[key];
 };
 
-// ---------- response normalization ----------
-const normalizeResponse = (response) => {
-  const { data, status, headers } = response;
-
+const normalize = (r) => {
+  const { data, status, headers } = r;
   const success = data?.success ?? (status >= 200 && status < 300);
-
   return {
     success,
     status,
     message: data?.message,
-    data: data?.data ?? data, // unwrap {success, data} OR return raw payload
+    data: data?.data ?? data,
     pagination: data?.pagination,
     stats: data?.stats,
     headers,
@@ -43,62 +46,31 @@ const normalizeResponse = (response) => {
 };
 
 let refreshPromise = null;
-let failedQueue = [];
+let queue = [];
 
-const processQueue = (error, token = null) => {
-  failedQueue.forEach(({ resolve, reject }) => {
-    if (error) reject(error);
-    else resolve(token);
-  });
-  failedQueue = [];
+const flushQueue = (err, token = null) => {
+  queue.forEach(({ resolve, reject }) => (err ? reject(err) : resolve(token)));
+  queue = [];
 };
 
-// ---------- request interceptor (ONLY config work here) ----------
-api.interceptors.request.use(
-  (config) => {
-    const token = TokenManager.get();
-
-    config.headers = config.headers || {};
-
-    if (token) {
-      setHeader(config.headers, "Authorization", `Bearer ${token}`);
-    }
-
-    // Let browser/axios set boundary for FormData
-    if (config.data instanceof FormData) {
-      deleteHeader(config.headers, "Content-Type");
-    }
-
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
-
-// ---------- refresh helper ----------
 const tryRefresh = async () => {
-  // 1) Cookie-based refresh
   try {
-    const r1 = await axios.post(
-      `${API_BASE_URL}/api/auth/refresh`,
+    const r = await axios.post(
+      `${API_BASE_URL}/auth/refresh`,
       {},
       { withCredentials: true }
     );
+    const accessToken =
+      r.data?.accessToken || r.data?.token || r.data?.data?.accessToken;
+    const refreshToken = r.data?.refreshToken || r.data?.data?.refreshToken;
+    if (accessToken) return { accessToken, refreshToken };
+  } catch {}
 
-    const t1 =
-      r1.data?.accessToken || r1.data?.token || r1.data?.data?.accessToken;
-    const rt1 = r1.data?.refreshToken || r1.data?.data?.refreshToken;
-
-    if (t1) return { accessToken: t1, refreshToken: rt1 };
-  } catch {
-    // ignore and fallback
-  }
-
-  // 2) Body/header-based refresh
   const refreshToken = TokenManager.getRefresh?.();
   if (!refreshToken) throw new Error("NO_REFRESH_TOKEN");
 
   const r2 = await axios.post(
-    `${API_BASE_URL}/api/auth/refresh`,
+    `${API_BASE_URL}/auth/refresh`,
     { refreshToken },
     {
       withCredentials: true,
@@ -106,22 +78,30 @@ const tryRefresh = async () => {
     }
   );
 
-  const t2 =
+  const accessToken =
     r2.data?.accessToken || r2.data?.token || r2.data?.data?.accessToken;
-  const rt2 = r2.data?.refreshToken || r2.data?.data?.refreshToken;
-
-  if (!t2) throw new Error("REFRESH_NO_ACCESS_TOKEN");
-
-  return { accessToken: t2, refreshToken: rt2 };
+  const newRefreshToken = r2.data?.refreshToken || r2.data?.data?.refreshToken;
+  if (!accessToken) throw new Error("REFRESH_NO_ACCESS_TOKEN");
+  return { accessToken, refreshToken: newRefreshToken };
 };
 
-// ---------- response interceptor (normalize + refresh on 401) ----------
-api.interceptors.response.use(
-  (response) => normalizeResponse(response),
-  async (error) => {
-    const originalRequest = error?.config;
+api.interceptors.request.use(
+  (config) => {
+    const token = TokenManager.get();
+    config.headers = config.headers || {};
+    if (token) setHeader(config.headers, "Authorization", `Bearer ${token}`);
+    if (config.data instanceof FormData)
+      deleteHeader(config.headers, "Content-Type");
+    return config;
+  },
+  (e) => Promise.reject(e)
+);
 
-    // No response means network/CORS/etc.
+api.interceptors.response.use(
+  (res) => normalize(res),
+  async (error) => {
+    const req = error?.config;
+
     if (!error?.response) {
       return Promise.reject({
         success: false,
@@ -132,53 +112,37 @@ api.interceptors.response.use(
 
     const { status, data } = error.response;
 
-    // Only attempt refresh once per request
-    if (status === 401 && originalRequest && !originalRequest._retry) {
-      originalRequest._retry = true;
+    if (status === 401 && req && !req._retry) {
+      req._retry = true;
 
-      // If refresh already running, wait and retry
       if (refreshPromise) {
         return new Promise((resolve, reject) =>
-          failedQueue.push({ resolve, reject })
-        )
-          .then((newToken) => {
-            originalRequest.headers = originalRequest.headers || {};
-            setHeader(
-              originalRequest.headers,
-              "Authorization",
-              `Bearer ${newToken}`
-            );
-            return api(originalRequest);
-          })
-          .catch((e) => Promise.reject(e));
+          queue.push({ resolve, reject })
+        ).then((newToken) => {
+          req.headers = req.headers || {};
+          setHeader(req.headers, "Authorization", `Bearer ${newToken}`);
+          return api(req);
+        });
       }
 
       refreshPromise = (async () => {
         const { accessToken, refreshToken } = await tryRefresh();
         TokenManager.set(accessToken);
-        if (refreshToken && TokenManager.setRefresh) {
+        if (refreshToken && TokenManager.setRefresh)
           TokenManager.setRefresh(refreshToken);
-        }
         return accessToken;
       })();
 
       try {
-        const newAccessToken = await refreshPromise;
-        processQueue(null, newAccessToken);
-
-        originalRequest.headers = originalRequest.headers || {};
-        setHeader(
-          originalRequest.headers,
-          "Authorization",
-          `Bearer ${newAccessToken}`
-        );
-
-        return api(originalRequest);
-      } catch (refreshErr) {
-        processQueue(refreshErr, null);
+        const newToken = await refreshPromise;
+        flushQueue(null, newToken);
+        req.headers = req.headers || {};
+        setHeader(req.headers, "Authorization", `Bearer ${newToken}`);
+        return api(req);
+      } catch (e) {
+        flushQueue(e, null);
         clearAuth();
         window.dispatchEvent(new CustomEvent("auth:logout"));
-
         return Promise.reject({
           success: false,
           message: "Session expired. Please login again.",

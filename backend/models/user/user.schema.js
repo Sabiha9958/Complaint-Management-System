@@ -1,49 +1,43 @@
-// user
-
 const mongoose = require("mongoose");
+
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const phoneRegex = /^[0-9]{10}$/;
 
 const userSchema = new mongoose.Schema(
   {
-    // basic
     name: {
       type: String,
-      required: [true, "Name is required"],
+      required: true,
       trim: true,
-      minlength: [2, "Name must be at least 2 characters"],
-      maxlength: [100, "Name cannot exceed 100 characters"],
+      minlength: 2,
+      maxlength: 100,
     },
     email: {
       type: String,
-      required: [true, "Email is required"],
-      unique: true,
-      lowercase: true,
+      required: true,
       trim: true,
-      match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "Please provide a valid email"],
+      lowercase: true,
+      match: [emailRegex, "Invalid email"],
     },
     phone: {
       type: String,
-      unique: true,
-      sparse: true,
       trim: true,
-      match: [/^[0-9]{10}$/, "Phone number must be exactly 10 digits"],
+      match: [phoneRegex, "Phone must be 10 digits"],
     },
 
-    // auth
-    password: {
-      type: String,
-      minlength: [6, "Password must be at least 6 characters"],
-      select: false,
-    },
-    googleId: { type: String },
-    profilePicture: { type: String, default: null },
+    password: { type: String, minlength: 6, select: false },
+    googleId: { type: String }, // keep undefined when not used
+    refreshToken: { type: String, select: false },
 
-    // profile
+    profilePicture: { type: String, trim: true },
+
     title: { type: String, trim: true, maxlength: 100 },
     department: { type: String, trim: true, maxlength: 100 },
     location: { type: String, trim: true, maxlength: 100 },
     bio: { type: String, trim: true, maxlength: 1000 },
 
-    // role
+    coverId: { type: Number, default: 1, min: 1, max: 50 },
+
     role: {
       type: String,
       enum: ["user", "staff", "admin"],
@@ -51,31 +45,41 @@ const userSchema = new mongoose.Schema(
       index: true,
     },
 
-    // status
     isActive: { type: Boolean, default: true, index: true },
     isDeleted: { type: Boolean, default: false, index: true },
 
-    // security
     loginAttempts: { type: Number, default: 0 },
     lockUntil: { type: Date },
-    emailVerificationToken: String,
-    emailVerificationExpire: Date,
-    isEmailVerified: { type: Boolean, default: false },
-    resetPasswordToken: String,
-    resetPasswordExpire: Date,
-    refreshToken: { type: String, select: false },
 
-    // audit
-    lastLogin: Date,
-    deletedAt: Date,
+    emailVerificationToken: { type: String },
+    emailVerificationExpire: { type: Date },
+    isEmailVerified: { type: Boolean, default: false },
+
+    resetPasswordToken: { type: String },
+    resetPasswordExpire: { type: Date },
+
+    lastLogin: { type: Date },
+    deletedAt: { type: Date },
     deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    roleChangedAt: Date,
+
+    roleChangedAt: { type: Date },
     roleChangedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     roleChangeReason: { type: String, trim: true, maxlength: 1000 },
   },
   {
     timestamps: true,
+    toJSON: {
+      transform: (_doc, ret) => {
+        delete ret.password;
+        delete ret.refreshToken;
+        return ret;
+      },
+    },
   }
 );
+
+userSchema.index({ email: 1 }, { unique: true });
+userSchema.index({ phone: 1 }, { unique: true, sparse: true });
+userSchema.index({ googleId: 1 }, { unique: true, sparse: true });
 
 module.exports = userSchema;

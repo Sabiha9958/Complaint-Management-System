@@ -1,11 +1,23 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  memo,
+  useEffect,
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+} from "react";
 import {
-  FiChevronDown,
-  FiChevronUp,
-  FiFilter,
-  FiSearch,
-  FiX,
-} from "react-icons/fi";
+  Search,
+  X,
+  SlidersHorizontal,
+  ChevronDown,
+  Filter,
+  Tag,
+  AlertCircle,
+  LayoutGrid,
+} from "lucide-react";
+import { clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
 import {
   COMPLAINT_STATUS,
   COMPLAINT_PRIORITY,
@@ -15,325 +27,276 @@ import {
   CATEGORY_LABELS,
 } from "../../utils/constants";
 
-const cx = (...c) => c.filter(Boolean).join(" ");
+const cn = (...inputs) => twMerge(clsx(inputs));
+const normalize = (str) =>
+  String(str || "")
+    .toLowerCase()
+    .trim();
 
-const buildOptions = (enumObj, labels) =>
-  Object.values(enumObj).map((value) => ({
+// Custom debounce hook for better performance
+const useDebounce = (value, delay) => {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+
+  return debouncedValue;
+};
+
+const FilterSelect = memo(
+  ({
+    label,
     value,
-    label: labels?.[value] || value,
-  }));
+    options,
+    onChange,
+    icon: Icon,
+    placeholder = "Select...",
+  }) => {
+    return (
+      <div className="relative group">
+        <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-indigo-500 transition-colors">
+          <Icon className="w-4 h-4" />
+        </div>
 
-const countActive = (v) =>
-  Number(Boolean(v.search?.trim())) +
-  Number(Boolean(v.status)) +
-  Number(Boolean(v.category)) +
-  Number(Boolean(v.priority));
-
-const Chip = memo(function Chip({ children, onRemove }) {
-  return (
-    <span className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">
-      {children}
-      <button
-        type="button"
-        onClick={onRemove}
-        className="rounded-lg p-1 hover:bg-blue-100"
-        aria-label="Remove filter"
-      >
-        <FiX className="h-3.5 w-3.5" />
-      </button>
-    </span>
-  );
-});
-
-const FieldLabel = memo(function FieldLabel({ htmlFor, children }) {
-  return (
-    <label
-      htmlFor={htmlFor}
-      className="mb-2 block text-xs font-extrabold uppercase tracking-widest text-gray-600"
-    >
-      {children}
-    </label>
-  );
-});
-
-const SelectField = memo(function SelectField({
-  id,
-  label,
-  value,
-  options,
-  onChange,
-  placeholder,
-}) {
-  const has = Boolean(value);
-
-  return (
-    <div>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
-      <div className="relative">
         <select
-          id={id}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className={cx(
-            "w-full appearance-none rounded-2xl border-2 px-4 py-3 text-sm font-semibold outline-none transition",
-            "focus:border-blue-500 focus:ring-4 focus:ring-blue-100",
-            has
-              ? "border-blue-400 bg-blue-50/50"
-              : "border-gray-200 bg-white hover:border-gray-300"
+          className={cn(
+            "w-full h-11 pl-10 pr-10 appearance-none outline-none text-sm font-medium rounded-xl border transition-all cursor-pointer bg-slate-50",
+            value
+              ? "bg-indigo-50/50 border-indigo-200 text-indigo-900 shadow-sm"
+              : "border-slate-200 text-slate-600 hover:border-slate-300 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
           )}
-          aria-label={`Filter by ${label}`}
         >
           <option value="">{placeholder}</option>
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
+          {options.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
             </option>
           ))}
         </select>
 
-        {has ? (
-          <button
-            type="button"
-            onClick={() => onChange("")}
-            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl p-2 text-gray-500 hover:bg-gray-100"
-            aria-label={`Clear ${label}`}
-          >
-            <FiX className="h-4 w-4" />
-          </button>
-        ) : null}
+        <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-400">
+          <ChevronDown className="w-4 h-4" />
+        </div>
+
+        <label className="absolute -top-2 left-3 px-1 bg-white text-[10px] font-bold uppercase tracking-wider text-slate-400 transition-all group-focus-within:text-indigo-500">
+          {label}
+        </label>
       </div>
+    );
+  }
+);
+
+const FilterPill = memo(({ label, value, onRemove }) => (
+  <button
+    onClick={onRemove}
+    className="group flex items-center gap-2 pl-3 pr-2 py-1.5 bg-white border border-slate-200 rounded-full text-xs text-slate-600 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 transition-all shadow-sm"
+  >
+    <span className="font-semibold text-slate-400 group-hover:text-rose-400">
+      {label}:
+    </span>
+    <span className="font-bold">{value}</span>
+    <div className="flex items-center justify-center w-4 h-4 rounded-full bg-slate-100 group-hover:bg-rose-200 text-slate-400 group-hover:text-rose-600 transition-colors">
+      <X className="w-2.5 h-2.5" />
     </div>
-  );
-});
+  </button>
+));
 
-const SearchField = memo(function SearchField({
-  value,
-  onChange,
-  placeholder = "Search by title, description…",
-}) {
-  const has = Boolean(value?.trim());
+const ComplaintFilters = memo(
+  ({ value = {}, onChange, className, defaultOpen = false }) => {
+    const [isOpen, setIsOpen] = useState(defaultOpen);
+    const [localSearch, setLocalSearch] = useState(value.search || "");
 
-  return (
-    <div>
-      <FieldLabel htmlFor="complaint-search">Search</FieldLabel>
-      <div className="relative">
-        <FiSearch className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
-        <input
-          id="complaint-search"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          className={cx(
-            "w-full rounded-2xl border-2 py-3 pl-12 pr-12 text-sm font-semibold outline-none transition",
-            "focus:border-blue-500 focus:ring-4 focus:ring-blue-100",
-            has
-              ? "border-blue-400 bg-blue-50/50"
-              : "border-gray-200 bg-white hover:border-gray-300"
-          )}
-          type="search"
-          aria-label="Search complaints"
-          autoComplete="off"
-        />
-        {has ? (
-          <button
-            type="button"
-            onClick={() => onChange("")}
-            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl p-2 text-gray-500 hover:bg-gray-100"
-            aria-label="Clear search"
-          >
-            <FiX className="h-4 w-4" />
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-});
+    const debouncedSearch = useDebounce(localSearch, 400);
 
-function ComplaintFilters({
-  value,
-  onChange,
-  className = "",
-  debounceMs = 350,
-  showActiveChips = true,
-  defaultOpen = true,
-  open, // optional controlled
-  onOpenChange, // optional controlled
-}) {
-  const activeCount = useMemo(() => countActive(value), [value]);
+    // Memoized options with better safety
+    const options = useMemo(() => {
+      const mapOptions = (src, labels) =>
+        Object.values(src || {}).map((val) => ({
+          value: normalize(val),
+          label: labels?.[normalize(val)] || val,
+        }));
 
-  const statusOptions = useMemo(
-    () => buildOptions(COMPLAINT_STATUS, STATUS_LABELS),
-    []
-  );
-  const categoryOptions = useMemo(
-    () => buildOptions(COMPLAINT_CATEGORY, CATEGORY_LABELS),
-    []
-  );
-  const priorityOptions = useMemo(
-    () => buildOptions(COMPLAINT_PRIORITY, PRIORITY_LABELS),
-    []
-  );
+      return {
+        status: mapOptions(COMPLAINT_STATUS, STATUS_LABELS),
+        priority: mapOptions(COMPLAINT_PRIORITY, PRIORITY_LABELS),
+        category: mapOptions(COMPLAINT_CATEGORY, CATEGORY_LABELS),
+      };
+    }, []);
 
-  const isControlled = typeof open === "boolean";
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
-  const isOpen = isControlled ? open : uncontrolledOpen;
+    // Sync debounced search with parent
+    useEffect(() => {
+      if (debouncedSearch !== (value.search || "")) {
+        onChange({ ...value, search: debouncedSearch });
+      }
+    }, [debouncedSearch, value, onChange]);
 
-  const setOpen = (next) => {
-    if (!isControlled) setUncontrolledOpen(next);
-    onOpenChange?.(next);
-  };
+    // Sync external search changes
+    useEffect(() => {
+      if (value.search !== localSearch) {
+        setLocalSearch(value.search || "");
+      }
+    }, [value.search]);
 
-  const clearAll = () =>
-    onChange({ search: "", status: "", category: "", priority: "" });
+    const updateFilter = useCallback(
+      (key, val) => {
+        onChange({ ...value, [key]: val });
+      },
+      [value, onChange]
+    );
 
-  // Debounced search
-  const [searchDraft, setSearchDraft] = useState(value.search || "");
-  const first = useRef(true);
+    const clearFilters = useCallback(() => {
+      setLocalSearch("");
+      onChange({ search: "", status: "", category: "", priority: "" });
+    }, [onChange]);
 
-  useEffect(() => {
-    if (first.current) return;
-    setSearchDraft(value.search || "");
-  }, [value.search]);
+    const activeFiltersCount = useMemo(
+      () =>
+        [value.status, value.category, value.priority].filter(Boolean).length,
+      [value.status, value.category, value.priority]
+    );
 
-  useEffect(() => {
-    first.current = false;
-  }, []);
+    const hasActiveFilters = activeFiltersCount > 0 || !!localSearch;
 
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if ((value.search || "") !== searchDraft)
-        onChange({ ...value, search: searchDraft });
-    }, debounceMs);
-    return () => clearTimeout(t);
-  }, [searchDraft, debounceMs, onChange, value]);
+    const filterPills = useMemo(
+      () => [
+        { key: "status", label: "Status", dict: STATUS_LABELS },
+        { key: "priority", label: "Priority", dict: PRIORITY_LABELS },
+        { key: "category", label: "Category", dict: CATEGORY_LABELS },
+      ],
+      []
+    );
 
-  const set = (key) => (next) => onChange({ ...value, [key]: next });
-
-  return (
-    <section
-      aria-label="Complaint filters"
-      className={cx(
-        "rounded-3xl border border-gray-200 bg-white shadow-sm ring-1 ring-black/5",
-        className
-      )}
-    >
-      <div className="flex flex-col gap-4 border-b border-gray-100 bg-gradient-to-b from-gray-50/80 to-white px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-        <button
-          type="button"
-          onClick={() => setOpen(!isOpen)}
-          className="flex items-center gap-3 text-left"
-          aria-expanded={isOpen}
-          aria-controls="filters-body"
-        >
-          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-blue-50 text-blue-700 ring-1 ring-blue-100">
-            <FiFilter className="h-5 w-5" />
+    return (
+      <div className={cn("w-full space-y-4", className)}>
+        {/* Search & Toggle Row */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1 group">
+            <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+              <Search className="w-5 h-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
+            </div>
+            <input
+              type="text"
+              placeholder="Search by ID, title, or description..."
+              value={localSearch}
+              onChange={(e) => setLocalSearch(e.target.value)}
+              className="w-full h-11 pl-10 pr-10 rounded-xl border border-slate-200 bg-white text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all shadow-sm"
+            />
+            {localSearch && (
+              <button
+                onClick={() => setLocalSearch("")}
+                className="absolute inset-y-0 right-2 flex items-center justify-center px-2 text-slate-400 hover:text-slate-600"
+              >
+                <div className="p-1 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors">
+                  <X className="w-3 h-3" />
+                </div>
+              </button>
+            )}
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-extrabold text-gray-900">Filters</h3>
-              <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-extrabold text-gray-600">
-                {activeCount}
+
+          <button
+            onClick={() => setIsOpen(!isOpen)}
+            className={cn(
+              "flex items-center justify-center gap-2 px-5 h-11 rounded-xl border text-sm font-bold transition-all whitespace-nowrap shadow-sm active:scale-95",
+              isOpen || activeFiltersCount > 0
+                ? "bg-slate-900 border-slate-900 text-white hover:bg-slate-800"
+                : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
+            )}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+            <span>Filters</span>
+            {activeFiltersCount > 0 && (
+              <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-indigo-500 text-white text-[10px] rounded-full ml-1">
+                {activeFiltersCount}
               </span>
-            </div>
-            <p className="mt-0.5 text-xs font-semibold text-gray-500">
-              {activeCount ? `${activeCount} active` : "No filters applied"}
-            </p>
-          </div>
-
-          <span className="ml-auto inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm font-extrabold text-gray-700 hover:bg-gray-50">
-            {isOpen ? "Hide" : "Show"}
-            {isOpen ? (
-              <FiChevronUp className="h-4 w-4" />
-            ) : (
-              <FiChevronDown className="h-4 w-4" />
             )}
-          </span>
-        </button>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={clearAll}
-            disabled={!activeCount}
-            className={cx(
-              "rounded-2xl px-4 py-2 text-sm font-extrabold transition",
-              activeCount
-                ? "bg-gray-900 text-white hover:bg-gray-800"
-                : "cursor-not-allowed bg-gray-100 text-gray-400"
-            )}
-            aria-label="Clear all filters"
-          >
-            Clear all
           </button>
         </div>
-      </div>
 
-      <div id="filters-body" className={cx("px-6 py-6", !isOpen && "hidden")}>
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-          <SearchField value={searchDraft} onChange={setSearchDraft} />
-
-          <SelectField
-            id="filter-status"
-            label="Status"
-            value={value.status}
-            options={statusOptions}
-            onChange={set("status")}
-            placeholder="All statuses"
-          />
-
-          <SelectField
-            id="filter-category"
-            label="Category"
-            value={value.category}
-            options={categoryOptions}
-            onChange={set("category")}
-            placeholder="All categories"
-          />
-
-          <SelectField
-            id="filter-priority"
-            label="Priority"
-            value={value.priority}
-            options={priorityOptions}
-            onChange={set("priority")}
-            placeholder="All priorities"
-          />
+        {/* Filter Grid */}
+        <div
+          className={cn(
+            "grid transition-all duration-300 ease-in-out overflow-hidden",
+            isOpen
+              ? "grid-rows-[1fr] opacity-100 pb-2"
+              : "grid-rows-[0fr] opacity-0"
+          )}
+        >
+          <div className="min-h-0 grid grid-cols-1 sm:grid-cols-3 gap-4 p-1">
+            <FilterSelect
+              label="Current Status"
+              placeholder="Any Status"
+              value={value.status || ""}
+              options={options.status}
+              onChange={(v) => updateFilter("status", v)}
+              icon={LayoutGrid}
+            />
+            <FilterSelect
+              label="Priority Level"
+              placeholder="Any Priority"
+              value={value.priority || ""}
+              options={options.priority}
+              onChange={(v) => updateFilter("priority", v)}
+              icon={AlertCircle}
+            />
+            <FilterSelect
+              label="Category"
+              placeholder="All Categories"
+              value={normalize(value.category) || ""}
+              options={options.category}
+              onChange={(v) => updateFilter("category", v)}
+              icon={Tag}
+            />
+          </div>
         </div>
 
-        {showActiveChips && activeCount ? (
-          <div className="mt-6 border-t border-gray-100 pt-5">
-            <div className="flex flex-wrap items-center gap-2">
-              {value.search?.trim() ? (
-                <Chip onRemove={() => onChange({ ...value, search: "" })}>
-                  Search: “{value.search.trim()}”
-                </Chip>
-              ) : null}
-
-              {value.status ? (
-                <Chip onRemove={() => onChange({ ...value, status: "" })}>
-                  Status: {STATUS_LABELS?.[value.status] || value.status}
-                </Chip>
-              ) : null}
-
-              {value.category ? (
-                <Chip onRemove={() => onChange({ ...value, category: "" })}>
-                  Category:{" "}
-                  {CATEGORY_LABELS?.[value.category] || value.category}
-                </Chip>
-              ) : null}
-
-              {value.priority ? (
-                <Chip onRemove={() => onChange({ ...value, priority: "" })}>
-                  Priority:{" "}
-                  {PRIORITY_LABELS?.[value.priority] || value.priority}
-                </Chip>
-              ) : null}
+        {/* Active Filters */}
+        {hasActiveFilters && (
+          <div className="flex flex-wrap items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">
+              <Filter className="w-3 h-3" /> Active:
             </div>
-          </div>
-        ) : null}
-      </div>
-    </section>
-  );
-}
 
-export default memo(ComplaintFilters);
+            {localSearch && (
+              <FilterPill
+                label="Search"
+                value={localSearch}
+                onRemove={() => setLocalSearch("")}
+              />
+            )}
+
+            {filterPills.map(({ key, label, dict }) => {
+              const val = value[key];
+              if (!val) return null;
+              return (
+                <FilterPill
+                  key={key}
+                  label={label}
+                  value={dict?.[normalize(val)] || val}
+                  onRemove={() => updateFilter(key, "")}
+                />
+              );
+            })}
+
+            <button
+              onClick={clearFilters}
+              className="ml-auto text-xs font-bold text-slate-500 hover:text-rose-600 hover:underline decoration-2 underline-offset-4 transition-colors"
+            >
+              Clear All
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+);
+
+ComplaintFilters.displayName = "ComplaintFilters";
+
+export default ComplaintFilters;

@@ -7,6 +7,7 @@ import React, {
 } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 import {
   FiAlertCircle,
   FiChevronLeft,
@@ -14,40 +15,66 @@ import {
   FiRefreshCw,
   FiSearch,
 } from "react-icons/fi";
-
 import { ComplaintAPI } from "../../api/complaints";
+import { hasPermission } from "../../utils/constants";
+import { useAuth } from "../../context/AuthContext";
 import ComplaintCard from "./ComplaintCard";
 import ComplaintFilters from "./ComplaintFilters";
-import StatusUpdateModal from "./StatusUpdate";
+import StatusUpdateModal from "./StatusUpdateModal";
+
+const cx = (...c) => c.filter(Boolean).join(" ");
+const getId = (c) => c?._id || c?.id || c?.complaintId;
 
 const CONFIG = { ITEMS_PER_PAGE: 21, DEFAULT_SORT: "-createdAt" };
-const cx = (...c) => c.filter(Boolean).join(" ");
-const clamp = (n, min, max) => Math.max(min, Math.min(Number(n) || min, max));
+const clamp = (n, min, max) => Math.max(min, Math.min(Number(n), max));
 
 const parseListResponse = (res, limit) => {
   const payload = res?.data ?? res;
+  const data = payload?.data ?? payload;
 
   const list =
-    [
-      payload?.data?.complaints,
-      payload?.complaints,
-      payload?.data,
-      payload,
-    ].find(Array.isArray) || [];
+    data?.complaints ||
+    payload?.complaints ||
+    data?.items ||
+    payload?.items ||
+    (Array.isArray(data) ? data : Array.isArray(payload) ? payload : []);
 
   const meta =
-    payload?.pagination || payload?.meta || payload?.data?.meta || {};
-  const total = Number(meta.total ?? payload?.total ?? list.length) || 0;
+    payload?.pagination || data?.pagination || payload?.meta || data?.meta;
+  const total = Number(meta?.total ?? payload?.total ?? list?.length ?? 0);
+  const totalPages = Number(
+    meta?.totalPages ??
+      meta?.pages ??
+      payload?.totalPages ??
+      data?.totalPages ??
+      (total ? Math.ceil(total / limit) : 1)
+  );
+  return {
+    list: Array.isArray(list) ? list : [],
+    total,
+    totalPages: Math.max(1, totalPages),
+  };
+};
 
-  const totalPages =
-    Number(
-      meta.totalPages ??
-        meta.pages ??
-        payload?.totalPages ??
-        payload?.data?.totalPages
-    ) || (total > 0 ? Math.ceil(total / limit) : 1);
+const readFiltersFromParams = (sp) => ({
+  page: Number(sp.get("page") || 1),
+  status: sp.get("status") || "",
+  category: sp.get("category") || "",
+  priority: sp.get("priority") || "",
+  search: sp.get("search") || "",
+  sort: sp.get("sort") || CONFIG.DEFAULT_SORT,
+});
 
-  return { list, total, totalPages: Math.max(1, totalPages) };
+const writeFiltersToParams = (filters) => {
+  const p = new URLSearchParams();
+  if (filters.page && filters.page !== 1) p.set("page", String(filters.page));
+  if (filters.search?.trim()) p.set("search", filters.search.trim());
+  if (filters.status) p.set("status", filters.status);
+  if (filters.category) p.set("category", filters.category);
+  if (filters.priority) p.set("priority", filters.priority);
+  if (filters.sort && filters.sort !== CONFIG.DEFAULT_SORT)
+    p.set("sort", filters.sort);
+  return p;
 };
 
 function SkeletonCard() {
@@ -56,7 +83,7 @@ function SkeletonCard() {
       <div className="mb-4 h-6 w-3/4 rounded-lg bg-slate-100" />
       <div className="space-y-2">
         <div className="h-4 w-full rounded-lg bg-slate-100" />
-        <div className="h-4 w-5/6 rounded-lg bg-slate-100" />
+        <div className="h-4 w-2/3 rounded-lg bg-slate-100" />
       </div>
       <div className="mt-8 flex gap-2">
         <div className="h-8 w-20 rounded-full bg-slate-100" />
@@ -80,7 +107,6 @@ function EmptyState({ hasFilters, onClear }) {
           ? "Try clearing filters or adjusting your search."
           : "No complaints available right now."}
       </p>
-
       {hasFilters ? (
         <button
           type="button"
@@ -94,34 +120,11 @@ function EmptyState({ hasFilters, onClear }) {
   );
 }
 
-const readFiltersFromParams = (searchParams) => ({
-  page: Number(searchParams.get("page")) || 1,
-  status: searchParams.get("status") || "",
-  category: searchParams.get("category") || "",
-  priority: searchParams.get("priority") || "",
-  search: searchParams.get("search") || "",
-  sort: searchParams.get("sort") || CONFIG.DEFAULT_SORT,
-});
-
-const writeFiltersToParams = (filters) => {
-  const p = new URLSearchParams();
-
-  // Only write non-default values (keeps URLs clean and stable)
-  if (filters.page > 1) p.set("page", String(filters.page));
-  if (filters.search?.trim()) p.set("search", filters.search.trim());
-  if (filters.status) p.set("status", filters.status);
-  if (filters.category) p.set("category", filters.category);
-  if (filters.priority) p.set("priority", filters.priority);
-  if (filters.sort && filters.sort !== CONFIG.DEFAULT_SORT)
-    p.set("sort", filters.sort);
-
-  return p;
-};
-
 export default function ComplaintList() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { user } = useAuth();
+  const canUpdateStatus = hasPermission(user?.role, "canEdit");
 
-  // URL is the source of truth
+  const [searchParams, setSearchParams] = useSearchParams();
   const filters = useMemo(
     () => readFiltersFromParams(searchParams),
     [searchParams]
@@ -133,16 +136,14 @@ export default function ComplaintList() {
         filters.search?.trim() ||
           filters.status ||
           filters.category ||
-          filters.priority ||
-          (filters.sort && filters.sort !== CONFIG.DEFAULT_SORT)
+          filters.priority
       ),
     [filters]
   );
-
   const [filtersOpen, setFiltersOpen] = useState(false);
   useEffect(() => setFiltersOpen(hasActiveFilters), [hasActiveFilters]);
 
-  const [status, setStatus] = useState("loading"); // "loading" | "refreshing" | "idle"
+  const [status, setStatus] = useState("loading");
   const loading = status === "loading";
   const refreshing = status === "refreshing";
 
@@ -153,11 +154,30 @@ export default function ComplaintList() {
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [activeComplaint, setActiveComplaint] = useState(null);
 
-  // Used to ignore stale in-flight requests (simple cancellation pattern) [web:12]
   const requestSeq = useRef(0);
 
+  const patchUrlFilters = useCallback(
+    (patch, { resetPage = true } = {}) => {
+      setSearchParams(
+        (prev) => {
+          const current = readFiltersFromParams(prev);
+
+          const next = {
+            ...current,
+            ...patch,
+            page: resetPage ? 1 : (patch.page ?? current.page), // <-- FIX
+          };
+
+          return writeFiltersToParams(next);
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+
   const fetchComplaints = useCallback(
-    async ({ silent = false } = {}) => {
+    async (silent = false) => {
       const seq = ++requestSeq.current;
       setStatus(silent ? "refreshing" : "loading");
 
@@ -165,36 +185,30 @@ export default function ComplaintList() {
         const query = {
           page: filters.page,
           limit: CONFIG.ITEMS_PER_PAGE,
+          sort: filters.sort || CONFIG.DEFAULT_SORT,
           ...(filters.search?.trim() ? { search: filters.search.trim() } : {}),
           ...(filters.status ? { status: filters.status } : {}),
           ...(filters.category ? { category: filters.category } : {}),
           ...(filters.priority ? { priority: filters.priority } : {}),
-          ...(filters.sort ? { sort: filters.sort } : {}),
         };
 
         const res = await ComplaintAPI.getAll(query);
-        if (seq !== requestSeq.current) return; // stale
+        if (seq !== requestSeq.current) return;
 
         const { list, total, totalPages } = parseListResponse(
           res,
           CONFIG.ITEMS_PER_PAGE
         );
-
         setComplaints(list);
         setMeta({ total, totalPages });
 
-        // If URL has an out-of-range page, correct it in the URL
         const safePage = clamp(filters.page, 1, totalPages);
         if (safePage !== filters.page) {
-          const next = { ...filters, page: safePage };
-          setSearchParams(writeFiltersToParams(next), { replace: true });
+          patchUrlFilters({ page: safePage }, { resetPage: false });
         }
       } catch (err) {
         if (seq !== requestSeq.current) return;
-
-        toast.error(
-          err?.response?.data?.message || "Failed to load complaints"
-        );
+        toast.error(err?.message || "Failed to load complaints");
         setComplaints([]);
         setMeta({ total: 0, totalPages: 1 });
       } finally {
@@ -204,32 +218,11 @@ export default function ComplaintList() {
     [filters, setSearchParams]
   );
 
-  // Re-fetch whenever URL-derived filters change
   useEffect(() => {
-    fetchComplaints({ silent: false });
+    fetchComplaints(false);
   }, [fetchComplaints]);
 
-  const setUrlFilters = useCallback(
-    (patch, { resetPage = true } = {}) => {
-      const next = {
-        ...filters,
-        ...patch,
-        page: resetPage ? 1 : filters.page,
-      };
-      setSearchParams(writeFiltersToParams(next), { replace: true });
-    },
-    [filters, setSearchParams]
-  );
-
   const clearAll = useCallback(() => {
-    setSearchParams(
-      writeFiltersToParams({
-        ...filters,
-        ...readFiltersFromParams(new URLSearchParams()),
-      }),
-      { replace: true }
-    );
-    // Simpler explicit reset:
     setSearchParams(
       writeFiltersToParams({
         page: 1,
@@ -248,21 +241,25 @@ export default function ComplaintList() {
   const changePage = useCallback(
     (nextPage) => {
       const page = clamp(nextPage, 1, meta.totalPages);
-      setUrlFilters({ page }, { resetPage: false });
+      patchUrlFilters({ page }, { resetPage: false });
+      setPageJump("");
       window.scrollTo({ top: 0, behavior: "smooth" });
     },
-    [meta.totalPages, setUrlFilters]
+    [meta.totalPages, patchUrlFilters]
   );
 
   const jumpToPage = useCallback(() => {
-    const page = clamp(pageJump, 1, meta.totalPages);
-    setUrlFilters({ page }, { resetPage: false });
+    if (pageJump === "" || pageJump == null) return;
+
+    const page = clamp(Number(pageJump), 1, meta.totalPages);
+    patchUrlFilters({ page }, { resetPage: false });
+    setPageJump("");
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [pageJump, meta.totalPages, setUrlFilters]);
+  }, [pageJump, meta.totalPages, patchUrlFilters]);
 
   const onRefresh = useCallback(() => {
-    fetchComplaints({ silent: true });
-    toast.info("Refreshing…", { toastId: "complaints-refresh" });
+    fetchComplaints(true);
+    toast.info("Refreshing", { toastId: "complaints-refresh" });
   }, [fetchComplaints]);
 
   const openStatusModal = useCallback((c) => {
@@ -276,35 +273,26 @@ export default function ComplaintList() {
   }, []);
 
   const handleStatusSuccess = useCallback(
-    (payload) => {
-      const updated =
-        payload?.data?.complaint ||
-        payload?.complaint ||
-        payload?.data ||
-        payload;
-
-      const updatedId = updated?._id || updated?.id;
+    (updated) => {
+      const updatedId = getId(updated);
       if (!updatedId) {
-        fetchComplaints({ silent: true });
+        fetchComplaints(true);
         closeStatusModal();
         return;
       }
-
       setComplaints((prev) =>
         prev.map((c) =>
-          String(c._id || c.id) === String(updatedId) ? { ...c, ...updated } : c
+          String(getId(c)) === String(updatedId) ? { ...c, ...updated } : c
         )
       );
-
       setActiveComplaint((prev) =>
-        prev && String(prev._id || prev.id) === String(updatedId)
+        prev && String(getId(prev)) === String(updatedId)
           ? { ...prev, ...updated }
           : prev
       );
-
       closeStatusModal();
     },
-    [fetchComplaints, closeStatusModal]
+    [closeStatusModal, fetchComplaints]
   );
 
   return (
@@ -313,10 +301,10 @@ export default function ComplaintList() {
         <header className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
           <div>
             <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">
-              Complaints Hub
+              Complaints
             </h1>
             <p className="mt-1 text-sm font-semibold text-slate-600">
-              {loading
+              {loading || refreshing
                 ? "Syncing data…"
                 : `Showing ${meta.total} record${meta.total === 1 ? "" : "s"}`}
             </p>
@@ -327,8 +315,7 @@ export default function ComplaintList() {
             onClick={onRefresh}
             disabled={loading || refreshing}
             className={cx(
-              "inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5",
-              "text-sm font-extrabold text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[0.99]",
+              "inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-extrabold text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[0.99]",
               "disabled:cursor-not-allowed disabled:opacity-50"
             )}
           >
@@ -350,7 +337,7 @@ export default function ComplaintList() {
               category: filters.category,
               priority: filters.priority,
             }}
-            onChange={(next) => setUrlFilters(next, { resetPage: true })}
+            onChange={(next) => patchUrlFilters(next, { resetPage: true })}
             open={filtersOpen}
             onOpenChange={setFiltersOpen}
             defaultOpen={false}
@@ -367,11 +354,10 @@ export default function ComplaintList() {
           <div className="space-y-8">
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
               {complaints.map((c) => (
-                <div key={c._id || c.id} className="space-y-3">
+                <div key={getId(c) || JSON.stringify(c)} className="space-y-3">
                   <ComplaintCard
                     complaint={c}
-                    to={(x) => `/complaints/${x._id || x.id}`}
-                    canUpdateStatus
+                    canUpdateStatus={canUpdateStatus}
                     onUpdateStatus={openStatusModal}
                   />
                 </div>
@@ -418,8 +404,13 @@ export default function ComplaintList() {
                     max={meta.totalPages}
                     value={pageJump}
                     onChange={(e) => setPageJump(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && jumpToPage()}
-                    placeholder="Go to…"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        jumpToPage();
+                      }
+                    }}
+                    placeholder="Go to"
                     className="w-32 rounded-2xl border border-slate-200 bg-slate-50 py-2.5 pl-4 pr-10 text-sm font-extrabold text-slate-800 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
                   />
                   <button

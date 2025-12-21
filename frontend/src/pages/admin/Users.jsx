@@ -1,10 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import apiClient from "../../api/apiClient";
 import { toast } from "react-toastify";
 import {
   FiUsers,
-  FiUserCheck,
-  FiUserX,
   FiShield,
   FiEdit3,
   FiTrash2,
@@ -12,12 +10,13 @@ import {
   FiX,
   FiChevronLeft,
   FiChevronRight,
+  FiChevronsLeft,
+  FiChevronsRight,
   FiMail,
   FiBriefcase,
   FiFilter,
 } from "react-icons/fi";
 
-// ====================== Utility Functions ======================
 const getRoleBadgeStyle = (role) => {
   const styles = {
     admin: "bg-purple-100 text-purple-700 border-purple-300",
@@ -43,15 +42,29 @@ const getAvatarColor = (name) => {
 const normalizeImageUrl = (url) => {
   if (!url || typeof url !== "string") return null;
   if (url.startsWith("http://") || url.startsWith("https://")) return url;
-  const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+  const apiBaseUrl = import.meta.env.VITE_API_URL;
   const cleanUrl = url.startsWith("/api/") ? url.replace("/api/", "/") : url;
+
   return cleanUrl.startsWith("/")
     ? `${apiBaseUrl}${cleanUrl}`
     : `${apiBaseUrl}/uploads/${cleanUrl}`;
 };
 
-// ====================== Components ======================
-const Avatar = ({ user, size = "md" }) => {
+function useDebouncedValue(value, delay = 500) {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+
+  return debounced;
+}
+
+const Avatar = React.memo(function Avatar({ user, size = "md" }) {
+  const [imgFailed, setImgFailed] = useState(false);
+
   const sizeClass = size === "lg" ? "h-16 w-16 text-2xl" : "h-10 w-10 text-sm";
   const rawImage =
     user?.avatarPreview ||
@@ -59,7 +72,8 @@ const Avatar = ({ user, size = "md" }) => {
     user?.avatarUrl ||
     user?.avatar ||
     user?.image;
-  const src = normalizeImageUrl(rawImage);
+
+  const src = !imgFailed ? normalizeImageUrl(rawImage) : null;
 
   if (src) {
     return (
@@ -68,138 +82,256 @@ const Avatar = ({ user, size = "md" }) => {
         alt={user?.name || "User"}
         crossOrigin="anonymous"
         className={`${sizeClass} rounded-full object-cover ring-2 ring-white shadow-md`}
-        onError={(e) => (e.target.style.display = "none")}
+        onError={() => setImgFailed(true)}
       />
     );
   }
 
   return (
     <div
-      className={`${sizeClass} ${getAvatarColor(user?.name)} flex items-center justify-center rounded-full text-white font-bold ring-2 ring-white shadow-md`}
+      className={`${sizeClass} ${getAvatarColor(
+        user?.name
+      )} flex items-center justify-center rounded-full text-white font-bold ring-2 ring-white shadow-md`}
+      aria-label={user?.name || "User"}
     >
       {user?.name?.charAt(0)?.toUpperCase() || "U"}
     </div>
   );
-};
+});
 
-const StatsCard = ({ title, value, icon: Icon, gradient }) => (
-  <div className="relative overflow-hidden rounded-xl bg-white p-6 shadow-sm border border-gray-100 hover:shadow-lg transition-all duration-300 group">
-    <div
-      className={`absolute inset-0 ${gradient} opacity-0 group-hover:opacity-5 transition-opacity duration-300`}
-    />
-    <div className="relative z-10">
-      <div className="flex items-start justify-between mb-3">
-        <div className={`rounded-lg ${gradient} bg-opacity-10 p-3`}>
-          <Icon
-            className={`h-6 w-6 ${gradient.replace("bg-gradient-to-br", "text-")}`}
-          />
-        </div>
+const Pagination = React.memo(function Pagination({
+  currentPage,
+  totalPages,
+  onPageChange,
+}) {
+  const pageNumbers = useMemo(() => {
+    const pages = [];
+    const showPages = 5;
+
+    if (totalPages <= showPages + 2) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+      return pages;
+    }
+
+    if (currentPage <= 3) {
+      for (let i = 1; i <= showPages; i++) pages.push(i);
+      pages.push("...");
+      pages.push(totalPages);
+      return pages;
+    }
+
+    if (currentPage >= totalPages - 2) {
+      pages.push(1);
+      pages.push("...");
+      for (let i = totalPages - showPages + 1; i <= totalPages; i++)
+        pages.push(i);
+      return pages;
+    }
+
+    pages.push(1);
+    pages.push("...");
+    for (let i = currentPage - 1; i <= currentPage + 1; i++) pages.push(i);
+    pages.push("...");
+    pages.push(totalPages);
+    return pages;
+  }, [currentPage, totalPages]);
+
+  return (
+    <div className="flex items-center justify-between border-t border-gray-100 bg-gray-50/50 px-6 py-4 flex-wrap gap-4">
+      <div className="flex items-center gap-2">
+        <button
+          disabled={currentPage === 1}
+          onClick={() => onPageChange(1)}
+          className="flex items-center justify-center rounded-lg border border-gray-200 bg-white p-2 text-gray-700 transition hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          type="button"
+          title="First page"
+        >
+          <FiChevronsLeft className="h-4 w-4" />
+        </button>
+
+        <button
+          disabled={currentPage === 1}
+          onClick={() => onPageChange(currentPage - 1)}
+          className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          type="button"
+        >
+          <FiChevronLeft className="h-4 w-4" /> Previous
+        </button>
       </div>
-      <h3 className="text-3xl font-bold text-gray-900 mb-1">{value || 0}</h3>
-      <p className="text-sm font-medium text-gray-500">{title}</p>
+
+      <div className="flex items-center gap-1">
+        {pageNumbers.map((page, idx) =>
+          page === "..." ? (
+            <span key={`ellipsis-${idx}`} className="px-3 py-2 text-gray-400">
+              ...
+            </span>
+          ) : (
+            <button
+              key={page}
+              onClick={() => onPageChange(page)}
+              className={`min-w-[40px] rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                currentPage === page
+                  ? "bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-md"
+                  : "bg-white text-gray-700 border border-gray-200 hover:bg-gray-50"
+              }`}
+              type="button"
+            >
+              {page}
+            </button>
+          )
+        )}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          disabled={currentPage === totalPages}
+          onClick={() => onPageChange(currentPage + 1)}
+          className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          type="button"
+        >
+          Next <FiChevronRight className="h-4 w-4" />
+        </button>
+
+        <button
+          disabled={currentPage === totalPages}
+          onClick={() => onPageChange(totalPages)}
+          className="flex items-center justify-center rounded-lg border border-gray-200 bg-white p-2 text-gray-700 transition hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          type="button"
+          title="Last page"
+        >
+          <FiChevronsRight className="h-4 w-4" />
+        </button>
+      </div>
     </div>
-  </div>
-);
+  );
+});
 
-const UserTableRow = ({ user, onEdit, onDelete, onToggleStatus }) => (
-  <tr className="group border-b border-gray-50 transition-all hover:bg-gradient-to-r hover:from-blue-50/30 hover:to-transparent">
-    <td className="px-6 py-4">
-      <div className="flex items-center gap-3">
-        <Avatar user={user} />
-        <div className="min-w-0">
-          <div className="font-semibold text-gray-900 truncate">
-            {user.name}
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-gray-500 mt-0.5">
-            <FiMail className="h-3 w-3 flex-shrink-0" />
-            <span className="truncate">{user.email}</span>
+const UserTableRow = React.memo(function UserTableRow({
+  user,
+  onEdit,
+  onDelete,
+  onToggleStatus,
+}) {
+  return (
+    <tr className="group border-b border-gray-50 transition-all hover:bg-gradient-to-r hover:from-blue-50/30 hover:to-transparent">
+      <td className="px-6 py-4">
+        <div className="flex items-center gap-3">
+          <Avatar user={user} />
+          <div className="min-w-0">
+            <div className="font-semibold text-gray-900 truncate">
+              {user.name}
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-gray-500 mt-0.5">
+              <FiMail className="h-3 w-3 flex-shrink-0" />
+              <span className="truncate">{user.email}</span>
+            </div>
           </div>
         </div>
-      </div>
-    </td>
-    <td className="px-6 py-4">
-      <span
-        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${getRoleBadgeStyle(user.role)}`}
-      >
-        {user.role === "admin" && <FiShield className="h-3 w-3" />}
-        {user.role?.toUpperCase()}
-      </span>
-    </td>
-    <td className="px-6 py-4">
-      <div className="flex items-center gap-1.5 text-sm text-gray-600">
-        <FiBriefcase className="h-4 w-4 text-gray-400 flex-shrink-0" />
-        <span className="truncate">
-          {user.department || (
-            <span className="italic text-gray-400">Not assigned</span>
-          )}
-        </span>
-      </div>
-    </td>
-    <td className="px-6 py-4">
-      <button
-        onClick={() => onToggleStatus(user._id, user.isActive)}
-        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-          user.isActive
-            ? "bg-green-500 focus:ring-green-500"
-            : "bg-gray-300 focus:ring-gray-400"
-        }`}
-        type="button"
-        aria-label={`Toggle ${user.name} status`}
-      >
-        <span
-          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-lg transition-transform duration-300 ${user.isActive ? "translate-x-6" : "translate-x-1"}`}
-        />
-      </button>
-    </td>
-    <td className="px-6 py-4">
-      <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-        <button
-          onClick={() => onEdit(user)}
-          className="rounded-lg p-2 text-blue-600 hover:bg-blue-50 transition-colors"
-          title="Edit user"
-          type="button"
-        >
-          <FiEdit3 className="h-4 w-4" />
-        </button>
-        <button
-          onClick={() => onDelete(user._id)}
-          className="rounded-lg p-2 text-red-600 hover:bg-red-50 transition-colors"
-          title="Delete user"
-          type="button"
-        >
-          <FiTrash2 className="h-4 w-4" />
-        </button>
-      </div>
-    </td>
-  </tr>
-);
+      </td>
 
-const EditUserModal = ({ user, onClose, onSave }) => {
+      <td className="px-6 py-4">
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${getRoleBadgeStyle(
+            user.role
+          )}`}
+        >
+          {user.role === "admin" && <FiShield className="h-3 w-3" />}
+          {user.role?.toUpperCase()}
+        </span>
+      </td>
+
+      <td className="px-6 py-4">
+        <div className="flex items-center gap-1.5 text-sm text-gray-600">
+          <FiBriefcase className="h-4 w-4 text-gray-400 flex-shrink-0" />
+          <span className="truncate">
+            {user.department || (
+              <span className="italic text-gray-400">Not assigned</span>
+            )}
+          </span>
+        </div>
+      </td>
+
+      <td className="px-6 py-4">
+        <button
+          onClick={() => onToggleStatus(user._id, user.isActive)}
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+            user.isActive
+              ? "bg-green-500 focus:ring-green-500"
+              : "bg-gray-300 focus:ring-gray-400"
+          }`}
+          type="button"
+          aria-label={`Toggle ${user.name} status`}
+        >
+          <span
+            className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-lg transition-transform duration-300 ${
+              user.isActive ? "translate-x-6" : "translate-x-1"
+            }`}
+          />
+        </button>
+      </td>
+
+      <td className="px-6 py-4">
+        <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+          <button
+            onClick={() => onEdit(user)}
+            className="rounded-lg p-2 text-blue-600 hover:bg-blue-50 transition-colors"
+            title="Edit user"
+            type="button"
+          >
+            <FiEdit3 className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => onDelete(user._id)}
+            className="rounded-lg p-2 text-red-600 hover:bg-red-50 transition-colors"
+            title="Delete user"
+            type="button"
+          >
+            <FiTrash2 className="h-4 w-4" />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+});
+
+const EditUserModal = React.memo(function EditUserModal({
+  user,
+  onClose,
+  onSave,
+}) {
   const [formData, setFormData] = useState({
-    name: user.name || "",
-    email: user.email || "",
-    role: user.role || "user",
-    phone: user.phone || "",
-    department: user.department || "",
+    name: user?.name || "",
+    email: user?.email || "",
+    role: user?.role || "user",
+    phone: user?.phone || "",
+    department: user?.department || "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const update = (key) => (e) =>
+    setFormData((prev) => ({
+      ...prev,
+      [key]: e.target.value,
+    }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    await onSave({
-      _id: user._id,
-      ...formData,
-      phone: formData.phone.trim(),
-      department: formData.department.trim(),
-    });
-    setIsSubmitting(false);
+    try {
+      await onSave({
+        _id: user._id,
+        ...formData,
+        phone: formData.phone.trim(),
+        department: formData.department.trim(),
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/70 backdrop-blur-sm p-4 animate-fadeIn">
       <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl animate-slideUp overflow-hidden">
-        {/* Header */}
         <div className="flex items-center justify-between bg-gradient-to-r from-blue-500 to-blue-600 px-6 py-4 text-white">
           <div className="flex items-center gap-3">
             <div className="bg-white/20 p-2 rounded-lg">
@@ -216,9 +348,7 @@ const EditUserModal = ({ user, onClose, onSave }) => {
           </button>
         </div>
 
-        {/* Body */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          {/* User Info */}
           <div className="flex items-center gap-4 pb-4 border-b border-gray-100">
             <Avatar user={user} size="lg" />
             <div>
@@ -227,7 +357,6 @@ const EditUserModal = ({ user, onClose, onSave }) => {
             </div>
           </div>
 
-          {/* Form Fields */}
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -237,9 +366,7 @@ const EditUserModal = ({ user, onClose, onSave }) => {
                 type="text"
                 required
                 value={formData.name}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, name: e.target.value }))
-                }
+                onChange={update("name")}
                 className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition"
               />
             </div>
@@ -252,9 +379,7 @@ const EditUserModal = ({ user, onClose, onSave }) => {
                 type="email"
                 required
                 value={formData.email}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, email: e.target.value }))
-                }
+                onChange={update("email")}
                 className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition"
               />
             </div>
@@ -266,9 +391,7 @@ const EditUserModal = ({ user, onClose, onSave }) => {
                 </label>
                 <select
                   value={formData.role}
-                  onChange={(e) =>
-                    setFormData((prev) => ({ ...prev, role: e.target.value }))
-                  }
+                  onChange={update("role")}
                   className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition"
                 >
                   <option value="user">User</option>
@@ -284,9 +407,7 @@ const EditUserModal = ({ user, onClose, onSave }) => {
                 <input
                   type="tel"
                   value={formData.phone}
-                  onChange={(e) =>
-                    setFormData((prev) => ({ ...prev, phone: e.target.value }))
-                  }
+                  onChange={update("phone")}
                   className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition"
                   placeholder="+91 xxxxx xxxxx"
                 />
@@ -300,19 +421,13 @@ const EditUserModal = ({ user, onClose, onSave }) => {
               <input
                 type="text"
                 value={formData.department}
-                onChange={(e) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    department: e.target.value,
-                  }))
-                }
+                onChange={update("department")}
                 className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition"
                 placeholder="Engineering, Sales, etc."
               />
             </div>
           </div>
 
-          {/* Actions */}
           <div className="flex gap-3 pt-2">
             <button
               type="button"
@@ -334,147 +449,184 @@ const EditUserModal = ({ user, onClose, onSave }) => {
       </div>
     </div>
   );
-};
+});
 
-// ====================== Main Component ======================
-const Users = () => {
+export default function Users() {
+  const usersPerPage = 25;
+
   const [users, setUsers] = useState([]);
   const [stats, setStats] = useState(null);
+  const [pagination, setPagination] = useState({ total: 0, pages: 1 });
+
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+
   const [activeTab, setActiveTab] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(searchQuery, 500);
+
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
 
-  // Debounce search
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 500);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
+  const sortedUsers = useMemo(() => {
+    return [...users].sort(
+      (a, b) =>
+        new Date(b.createdAt || b.updatedAt || 0) -
+        new Date(a.createdAt || a.updatedAt || 0)
+    );
+  }, [users]);
 
-  // Fetch users - FIXED: removed dependencies causing infinite loop
-  useEffect(() => {
-    let isMounted = true;
+  const closeModal = useCallback(() => {
+    setShowModal(false);
+    setEditingUser(null);
+  }, []);
 
-    const fetchUsers = async () => {
+  const openEdit = useCallback((u) => {
+    setEditingUser(u);
+    setShowModal(true);
+  }, []);
+
+  const handlePageChange = useCallback((page) => {
+    setCurrentPage(page);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const fetchUsers = useCallback(
+    async (signal) => {
       setLoading(true);
       try {
-        const params = new URLSearchParams({ page: currentPage, limit: 40 });
+        const params = new URLSearchParams({
+          page: String(currentPage),
+          limit: String(usersPerPage),
+        });
+
         if (debouncedSearch.trim())
           params.append("search", debouncedSearch.trim());
         if (activeTab !== "all") params.append("role", activeTab);
 
-        const res = await apiClient.get(`/auth/users?${params}`);
-        if (!res.success) throw res;
-
-        if (!isMounted) return;
-
-        const payload = res.data;
-        const userList = Array.isArray(payload)
-          ? payload
-          : payload?.data || payload?.users || [];
-
-        // Sort by latest
-        const sorted = [...userList].sort(
-          (a, b) =>
-            new Date(b.createdAt || b.updatedAt || 0) -
-            new Date(a.createdAt || a.updatedAt || 0)
+        const res = await apiClient.get(
+          `/users?${params.toString()}`,
+          signal ? { signal } : undefined
         );
+        if (!res?.success) throw res;
 
-        setUsers(sorted);
-        setTotalPages(payload?.pagination?.pages || 1);
-        setStats(payload?.stats || null);
+        setUsers(res.data || []);
+        setPagination({
+          total: res.pagination?.total || 0,
+          pages: res.pagination?.pages || 1,
+        });
+
+        if (res.stats) {
+          setStats({
+            total: res.stats.total,
+            active: res.stats.active,
+            inactive: res.stats.inactive,
+            admins: res.stats.byRole?.admin || 0,
+            staff: res.stats.byRole?.staff || 0,
+            users: res.stats.byRole?.user || 0,
+          });
+        } else {
+          setStats(null);
+        }
       } catch (error) {
-        if (
-          isMounted &&
-          error.code !== "TOKEN_EXPIRED" &&
-          error.status !== 401
-        ) {
-          toast.error(error.message || "Failed to load users");
+        if (error?.name !== "AbortError" && error?.code !== "ERR_CANCELED") {
+          if (error?.code !== "TOKEN_EXPIRED" && error?.status !== 401) {
+            toast.error(error?.message || "Failed to load users");
+          }
         }
       } finally {
-        if (isMounted) setLoading(false);
+        setLoading(false);
       }
-    };
+    },
+    [activeTab, currentPage, debouncedSearch]
+  );
 
-    fetchUsers();
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchUsers(controller.signal);
+    return () => controller.abort();
+  }, [fetchUsers]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [currentPage, activeTab, debouncedSearch]);
-
-  // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [activeTab, debouncedSearch]);
 
-  const handleSaveUser = async (updatedData) => {
-    try {
-      const payload = {
-        name: updatedData.name,
-        email: updatedData.email,
-        role: updatedData.role,
-        phone: updatedData.phone,
-        department: updatedData.department,
-      };
+  const handleSaveUser = useCallback(
+    async (updatedData) => {
+      try {
+        const payload = {
+          name: updatedData.name,
+          email: updatedData.email,
+          role: updatedData.role,
+          phone: updatedData.phone,
+          department: updatedData.department,
+        };
 
-      const res = await apiClient.put(
-        `/auth/users/${updatedData._id}`,
-        payload
+        const res = await apiClient.put(`/users/${updatedData._id}`, payload);
+        if (!res?.success) throw res;
+
+        const updatedUser = res.data || updatedData;
+        setUsers((prev) =>
+          prev.map((u) =>
+            u._id === updatedUser._id ? { ...u, ...updatedUser } : u
+          )
+        );
+
+        toast.success("User updated successfully");
+        closeModal();
+
+        fetchUsers();
+      } catch (err) {
+        toast.error(err?.message || "Failed to update user");
+      }
+    },
+    [closeModal, fetchUsers]
+  );
+
+  const handleDelete = useCallback(
+    async (id) => {
+      const ok = window.confirm(
+        "Are you sure you want to delete this user? This action cannot be undone."
       );
-      if (!res.success) throw res;
+      if (!ok) return;
 
-      const updatedUser = res.data || updatedData;
-      setUsers((prev) =>
-        prev.map((u) =>
-          u._id === updatedUser._id ? { ...u, ...updatedUser } : u
-        )
-      );
-      toast.success("✅ User updated successfully");
-      setShowModal(false);
-    } catch (err) {
-      toast.error(err.message || "Failed to update user");
-    }
-  };
+      try {
+        const res = await apiClient.delete(`/users/${id}`);
+        if (!res?.success) throw res;
 
-  const handleDelete = async (id) => {
-    if (
-      !window.confirm(
-        "⚠️ Are you sure you want to delete this user? This action cannot be undone."
-      )
-    )
-      return;
+        setUsers((prev) => prev.filter((u) => u._id !== id));
+        toast.success("User deleted successfully");
 
-    try {
-      const res = await apiClient.delete(`/auth/users/${id}`);
-      if (!res.success) throw res;
+        fetchUsers();
+      } catch (err) {
+        toast.error(err?.message || "Failed to delete user");
+      }
+    },
+    [fetchUsers]
+  );
 
-      setUsers((prev) => prev.filter((u) => u._id !== id));
-      toast.success("🗑️ User deleted successfully");
-    } catch (err) {
-      toast.error(err.message || "Failed to delete user");
-    }
-  };
+  const handleToggleStatus = useCallback(
+    async (id, currentStatus) => {
+      try {
+        const res = await apiClient.put(`/users/${id}`, {
+          isActive: !currentStatus,
+        });
+        if (!res?.success) throw res;
 
-  const handleToggleStatus = async (id, currentStatus) => {
-    try {
-      const res = await apiClient.put(`/auth/users/${id}`, {
-        isActive: !currentStatus,
-      });
-      if (!res.success) throw res;
+        setUsers((prev) =>
+          prev.map((u) =>
+            u._id === id ? { ...u, isActive: !currentStatus } : u
+          )
+        );
+        toast.success(`User ${!currentStatus ? "activated" : "deactivated"}`);
 
-      setUsers((prev) =>
-        prev.map((u) => (u._id === id ? { ...u, isActive: !currentStatus } : u))
-      );
-      toast.success(`User ${!currentStatus ? "activated" : "deactivated"}`);
-    } catch (err) {
-      toast.error(err.message || "Failed to update status");
-    }
-  };
+        fetchUsers();
+      } catch (err) {
+        toast.error(err?.message || "Failed to update status");
+      }
+    },
+    [fetchUsers]
+  );
 
   const TabButton = ({ id, label, count }) => (
     <button
@@ -505,7 +657,6 @@ const Users = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-gray-50 p-6 lg:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        {/* Header */}
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="flex items-center gap-3 text-3xl font-bold text-gray-900">
@@ -520,41 +671,8 @@ const Users = () => {
           </div>
         </div>
 
-        {/* Stats Grid */}
-        {stats && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatsCard
-              title="Total Users"
-              value={stats.total}
-              icon={FiUsers}
-              gradient="bg-gradient-to-br from-blue-500 to-blue-600"
-            />
-            <StatsCard
-              title="Active Users"
-              value={stats.active}
-              icon={FiUserCheck}
-              gradient="bg-gradient-to-br from-green-500 to-green-600"
-            />
-            <StatsCard
-              title="Administrators"
-              value={stats.admins}
-              icon={FiShield}
-              gradient="bg-gradient-to-br from-purple-500 to-purple-600"
-            />
-            <StatsCard
-              title="Inactive"
-              value={stats.inactive}
-              icon={FiUserX}
-              gradient="bg-gradient-to-br from-red-500 to-red-600"
-            />
-          </div>
-        )}
-
-        {/* Main Table Card */}
         <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-lg">
-          {/* Filters & Search */}
           <div className="border-b border-gray-100 bg-gray-50/50 p-5 space-y-4">
-            {/* Tabs */}
             <div className="flex gap-6 overflow-x-auto border-b border-gray-200 -mb-px scrollbar-hide">
               <TabButton id="all" label="All Users" count={stats?.total} />
               <TabButton id="admin" label="Admins" count={stats?.admins} />
@@ -562,7 +680,6 @@ const Users = () => {
               <TabButton id="user" label="Users" count={stats?.users} />
             </div>
 
-            {/* Search Bar */}
             <div className="relative">
               <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
               <input
@@ -584,7 +701,6 @@ const Users = () => {
             </div>
           </div>
 
-          {/* Table */}
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50/80 text-xs font-bold uppercase tracking-wider text-gray-600">
@@ -596,6 +712,7 @@ const Users = () => {
                   <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
+
               <tbody>
                 {loading ? (
                   [...Array(5)].map((_, i) => (
@@ -624,15 +741,12 @@ const Users = () => {
                       <td className="px-6 py-4" />
                     </tr>
                   ))
-                ) : users.length > 0 ? (
-                  users.map((user) => (
+                ) : sortedUsers.length > 0 ? (
+                  sortedUsers.map((user) => (
                     <UserTableRow
                       key={user._id}
                       user={user}
-                      onEdit={(u) => {
-                        setEditingUser(u);
-                        setShowModal(true);
-                      }}
+                      onEdit={openEdit}
                       onDelete={handleDelete}
                       onToggleStatus={handleToggleStatus}
                     />
@@ -658,52 +772,32 @@ const Users = () => {
             </table>
           </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between border-t border-gray-100 bg-gray-50/50 px-6 py-4">
-              <button
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                type="button"
-              >
-                <FiChevronLeft className="h-4 w-4" /> Previous
-              </button>
+          {!loading && pagination.pages > 1 && (
+            <Pagination
+              currentPage={currentPage}
+              totalPages={pagination.pages}
+              onPageChange={handlePageChange}
+            />
+          )}
 
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">
-                  Page{" "}
-                  <span className="font-bold text-gray-900">{currentPage}</span>{" "}
-                  of{" "}
-                  <span className="font-bold text-gray-900">{totalPages}</span>
-                </span>
-              </div>
-
-              <button
-                disabled={currentPage === totalPages}
-                onClick={() =>
-                  setCurrentPage((p) => Math.min(totalPages, p + 1))
-                }
-                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                type="button"
-              >
-                Next <FiChevronRight className="h-4 w-4" />
-              </button>
+          {!loading && pagination.pages <= 1 && pagination.total > 0 && (
+            <div className="border-t border-gray-100 bg-gray-50/50 px-6 py-4">
+              <p className="text-sm text-gray-600 text-center">
+                Showing all {pagination.total} user
+                {pagination.total !== 1 ? "s" : ""}
+              </p>
             </div>
           )}
         </div>
       </div>
 
-      {/* Modal */}
       {showModal && editingUser && (
         <EditUserModal
           user={editingUser}
-          onClose={() => setShowModal(false)}
+          onClose={closeModal}
           onSave={handleSaveUser}
         />
       )}
     </div>
   );
-};
-
-export default Users;
+}

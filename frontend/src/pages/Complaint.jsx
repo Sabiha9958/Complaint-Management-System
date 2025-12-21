@@ -1,21 +1,55 @@
 import React from "react";
-import { Routes, Route, NavLink, Navigate } from "react-router-dom";
-import { FiFileText, FiUser, FiGrid, FiPlusCircle } from "react-icons/fi";
+import {
+  Routes,
+  Route,
+  NavLink,
+  Navigate,
+  useLocation,
+} from "react-router-dom";
+import {
+  FiFileText,
+  FiUser,
+  FiGrid,
+  FiPlusCircle,
+  FiActivity,
+} from "react-icons/fi";
+import { motion, AnimatePresence } from "framer-motion";
+import { clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
 
+// Import actual components
 import MyComplaints from "./complaints/MyComplaints";
 import AllComplaints from "./complaints/ComplaintsShowcase";
 import ComplaintDetailPage from "./complaints/ComplaintDetailPage";
 import ComplaintEditPage from "./complaints/ComplaintEditPage";
 import SubmitComplaint from "./complaints/SubmitComplaint";
 
-/* Central config: tabs + routes in one place */
+/* --- Utilities --- */
+function cn(...inputs) {
+  return twMerge(clsx(inputs));
+}
+
+/* --- Configuration --- */
 const TABS = [
-  { to: "/complaints/my", label: "My", sub: "Your submissions", Icon: FiUser },
-  { to: "/complaints/all", label: "All", sub: "Browse all", Icon: FiGrid },
   {
+    id: "my",
+    to: "/complaints/my",
+    label: "My Complaints",
+    sub: "Track status",
+    Icon: FiUser,
+  },
+  {
+    id: "all",
+    to: "/complaints/all",
+    label: "Browse All",
+    sub: "Community view",
+    Icon: FiGrid,
+  },
+  {
+    id: "new",
     to: "/complaints/new",
-    label: "New",
-    sub: "Submit complaint",
+    label: "New Report",
+    sub: "File issue",
     Icon: FiPlusCircle,
   },
 ];
@@ -29,126 +63,234 @@ const ROUTES = [
   { path: ":id/edit", element: <ComplaintEditPage /> },
 ];
 
-export default function Complaint() {
+/* --- Sub Components --- */
+
+/**
+ * PageWrapper Component
+ * Provides consistent page transitions and layout for all routes
+ */
+function PageWrapper({ children }) {
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        {/* Header */}
-        <header className="rounded-3xl border border-gray-200 bg-white shadow-sm p-6">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div className="min-w-0">
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 flex items-center gap-3">
-                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm">
-                  <FiFileText className="h-5 w-5" />
-                </span>
-                Complaints
-              </h1>
-              <p className="mt-1 text-sm text-gray-600">
-                Submit, track, and manage complaints in one place.
-              </p>
-            </div>
-
-            {/* Optional quick action (keeps UX fast even if user scrolls) */}
-            <NavLink
-              to="/complaints/new"
-              className={({ isActive }) =>
-                [
-                  "inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-bold transition shadow-sm",
-                  isActive
-                    ? "bg-blue-600 text-white"
-                    : "bg-white border border-gray-200 text-gray-800 hover:bg-gray-50",
-                ].join(" ")
-              }
-            >
-              <FiPlusCircle className="h-5 w-5" />
-              Submit
-            </NavLink>
-          </div>
-        </header>
-
-        {/* Tabs (sticky) */}
-        <nav
-          aria-label="Complaints sections"
-          className="sticky top-3 z-10 rounded-2xl border border-gray-200 bg-white/85 backdrop-blur shadow-sm p-2"
-        >
-          <div className="grid grid-cols-3 gap-2">
-            {TABS.map((t) => (
-              <TabLink
-                key={t.to}
-                to={t.to}
-                label={t.label}
-                sub={t.sub}
-                Icon={t.Icon}
-              />
-            ))}
-          </div>
-        </nav>
-
-        {/* Nested Routes */}
-        <section className="min-h-[50vh]">
-          <Routes>
-            {ROUTES.map((r, i) =>
-              r.index ? (
-                <Route key={`idx-${i}`} index element={r.element} />
-              ) : (
-                <Route key={r.path} path={r.path} element={r.element} />
-              )
-            )}
-
-            <Route
-              path="*"
-              element={
-                <div className="rounded-3xl border border-dashed border-gray-300 bg-white p-10 text-center">
-                  <p className="text-sm font-semibold text-gray-900">
-                    Unknown complaints page
-                  </p>
-                  <p className="mt-1 text-sm text-gray-600">
-                    Use the tabs above to navigate.
-                  </p>
-                </div>
-              }
-            />
-          </Routes>
-        </section>
-      </div>
-    </main>
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      transition={{ duration: 0.3, ease: "easeInOut" }}
+      className="h-full rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8"
+    >
+      {children}
+    </motion.div>
   );
 }
 
-/* Segmented Tab */
+/**
+ * TabLink Component
+ * Individual navigation tab with active state animation
+ */
 function TabLink({ to, label, sub, Icon }) {
   return (
     <NavLink
       to={to}
+      end={to === "/complaints/my"}
       className={({ isActive }) =>
-        [
-          "group relative rounded-xl border px-3 py-2.5 transition text-left",
-          isActive
-            ? "bg-blue-600 border-blue-600 text-white shadow-sm"
-            : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50",
-        ].join(" ")
+        cn(
+          "group relative flex items-center gap-3 rounded-xl px-3 py-3 transition-all duration-300 sm:px-5",
+          "hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40",
+          !isActive && "text-slate-500 hover:text-slate-700"
+        )
       }
+      aria-label={`${label}: ${sub}`}
     >
-      <div className="flex items-center gap-2.5">
-        <span
-          className={[
-            "inline-flex h-9 w-9 items-center justify-center rounded-xl border transition",
-            "shrink-0",
-            "group-hover:scale-[1.02]",
-            // icon capsule
-            "bg-white/10 border-white/20 text-white",
-          ].join(" ")}
-        >
-          <Icon className="h-4.5 w-4.5" />
-        </span>
+      {({ isActive }) => (
+        <>
+          {/* Active Background Animation (Shared Layout) */}
+          {isActive && (
+            <motion.div
+              layoutId="activeTab"
+              className="absolute inset-0 rounded-xl bg-white shadow-sm ring-1 ring-slate-200"
+              transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+            />
+          )}
 
-        <div className="min-w-0">
-          <p className="text-sm font-extrabold leading-tight truncate">
-            {label}
-          </p>
-          <p className="text-[11px] opacity-90 leading-tight truncate">{sub}</p>
-        </div>
-      </div>
+          {/* Icon Capsule */}
+          <span
+            className={cn(
+              "relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-all duration-300",
+              isActive
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-200 scale-105"
+                : "bg-slate-100 text-slate-500 group-hover:bg-indigo-50 group-hover:text-indigo-600 group-hover:scale-105"
+            )}
+          >
+            <Icon className="h-5 w-5" aria-hidden="true" />
+          </span>
+
+          {/* Text Content */}
+          <div className="relative z-10 min-w-0 flex-1 text-left hidden sm:block">
+            <p
+              className={cn(
+                "text-sm font-bold leading-none transition-colors",
+                isActive ? "text-slate-900" : "text-slate-600"
+              )}
+            >
+              {label}
+            </p>
+            <p
+              className={cn(
+                "mt-1 truncate text-[11px] font-medium leading-none transition-colors",
+                isActive ? "text-indigo-600" : "text-slate-400"
+              )}
+            >
+              {sub}
+            </p>
+          </div>
+        </>
+      )}
     </NavLink>
+  );
+}
+
+/**
+ * NotFoundState Component
+ * 404 error state display
+ */
+function NotFoundState() {
+  return (
+    <PageWrapper>
+      <div className="flex flex-col items-center justify-center py-16 text-center">
+        <div className="rounded-full bg-slate-100 p-6">
+          <FiGrid className="h-12 w-12 text-slate-400" aria-hidden="true" />
+        </div>
+        <h3 className="mt-6 text-xl font-bold text-slate-900">
+          Page Not Found
+        </h3>
+        <p className="mt-2 text-sm text-slate-500 max-w-sm">
+          The page you're looking for doesn't exist or has been moved.
+        </p>
+        <NavLink
+          to="/complaints/my"
+          className="mt-6 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition-all hover:bg-indigo-700 hover:-translate-y-0.5 shadow-sm hover:shadow-md"
+        >
+          <FiGrid className="h-4 w-4" />
+          Back to Dashboard
+        </NavLink>
+      </div>
+    </PageWrapper>
+  );
+}
+
+/* --- Main Component --- */
+
+/**
+ * Complaint Component
+ * Main layout and routing for complaint management system
+ */
+export default function Complaint() {
+  const location = useLocation();
+
+  return (
+    <main className="min-h-screen bg-slate-50/50 py-8 px-4 sm:px-6 lg:px-8 font-sans text-slate-900">
+      <div className="mx-auto max-w-6xl space-y-8">
+        {/* Header Section */}
+        <header className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          {/* Decorative Background Gradient */}
+          <div
+            className="absolute -top-24 -right-24 h-64 w-64 rounded-full bg-indigo-50 blur-3xl opacity-60 pointer-events-none"
+            aria-hidden="true"
+          />
+
+          <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-start gap-5">
+              {/* App Icon */}
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-200">
+                <FiFileText className="h-7 w-7" aria-hidden="true" />
+              </div>
+
+              {/* Header Text */}
+              <div className="space-y-1">
+                <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">
+                  Complaint Hub
+                </h1>
+                <p className="text-slate-500 font-medium">
+                  Manage grievances, track resolutions, and submit reports.
+                </p>
+
+                {/* Status Indicators */}
+                <div
+                  className="flex items-center gap-4 pt-2 text-xs font-semibold text-slate-400 uppercase tracking-wider"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <FiActivity
+                      className="text-emerald-500 h-3.5 w-3.5"
+                      aria-hidden="true"
+                    />
+                    System Online
+                  </span>
+                  <span aria-hidden="true">•</span>
+                  <span>Avg. Resolution: 2 Days</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Action Button (Desktop Only) */}
+            <NavLink
+              to="/complaints/new"
+              className={({ isActive }) =>
+                cn(
+                  "hidden md:inline-flex items-center gap-2 rounded-xl px-6 py-3.5 text-sm font-bold transition-all duration-200",
+                  "border shadow-sm hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40",
+                  isActive
+                    ? "bg-indigo-50 border-indigo-200 text-indigo-700 pointer-events-none opacity-50"
+                    : "bg-indigo-600 border-transparent text-white hover:bg-indigo-700 hover:shadow-lg shadow-indigo-200"
+                )
+              }
+              aria-label="File a new complaint"
+            >
+              <FiPlusCircle className="h-5 w-5" aria-hidden="true" />
+              <span>File Complaint</span>
+            </NavLink>
+          </div>
+        </header>
+
+        {/* Sticky Navigation Tabs */}
+        <div className="sticky top-4 z-30">
+          <nav
+            className="rounded-2xl border border-white/40 bg-white/80 p-1.5 shadow-xl shadow-slate-200/40 backdrop-blur-xl"
+            aria-label="Complaint navigation tabs"
+          >
+            <div className="grid grid-cols-3 gap-1 sm:gap-2">
+              {TABS.map((tab) => (
+                <TabLink key={tab.id} {...tab} />
+              ))}
+            </div>
+          </nav>
+        </div>
+
+        {/* Animated Routes Container */}
+        <section
+          className="min-h-[60vh] relative"
+          role="region"
+          aria-label="Main content"
+        >
+          <AnimatePresence mode="wait">
+            <Routes location={location} key={location.pathname}>
+              {ROUTES.map((route, index) =>
+                route.index ? (
+                  <Route key={`index-${index}`} index element={route.element} />
+                ) : (
+                  <Route
+                    key={route.path}
+                    path={route.path}
+                    element={route.element}
+                  />
+                )
+              )}
+              <Route path="*" element={<NotFoundState />} />
+            </Routes>
+          </AnimatePresence>
+        </section>
+      </div>
+    </main>
   );
 }

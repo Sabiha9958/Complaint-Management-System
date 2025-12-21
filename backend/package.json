@@ -7,12 +7,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "seed:all": "node seeders/masterSeeder.js -i",
-    "seed:clear": "node seeders/masterSeeder.js -d",
-    "seed:wipe": "node seeders/masterSeeder.js -c",
-    "seed:users": "node seeders/userSeeder.js -i",
-    "seed:complaints": "node seeders/complaintSeeder.js -i",
-    "seed:roles": "node seeders/seedRolesPermissions.js",
+    "seed:import": "node seeders/masterSeeder.js import",
+    "seed:destroy": "node seeders/masterSeeder.js destroy",
+    "seed:clear": "node seeders/masterSeeder.js clear",
+    "seed:import:custom": "node seeders/masterSeeder.js import --users=100 --complaints=200",
     "test": "echo \"No tests specified\" && exit 0"
   },
   "keywords": [

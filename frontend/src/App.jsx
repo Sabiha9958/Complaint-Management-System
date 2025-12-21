@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Routes, Route, Navigate, Outlet, useLocation } from "react-router-dom";
+import { ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 import { Activity, AlertCircle } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
 
-import Navbar from "./components/layout/Navbar";
-import Footer from "./components/layout/Footer";
+import Navbar from "./components/Layout/Navbar";
+import Footer from "./components/Layout/Footer";
 
 import Home from "./pages/Home";
 import Login from "./pages/Login";
@@ -27,14 +29,11 @@ import CookiePolicy from "./pages/Docs/CookiePolicy";
 import Accessibility from "./pages/Docs/Accessibility";
 import PublicDashboard from "./pages/Docs/PublicDashboard";
 
-// --------------------
 // UX helpers
-// --------------------
 const ScrollToTop = () => {
   const { pathname } = useLocation();
 
   useEffect(() => {
-    // Common pattern for Router v6 scroll-to-top on navigation. [web:93]
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   }, [pathname]);
 
@@ -93,9 +92,7 @@ const useDelayedSpinner = (loading, delay = 250) => {
   return show;
 };
 
-// --------------------
-// Route guards (Outlet-based)
-// --------------------
+// Route guards
 const RequireAuth = ({ allowedRoles }) => {
   const { user, loading, isInitialized } = useAuth();
   const location = useLocation();
@@ -135,14 +132,11 @@ const RequireGuest = () => {
   return <Outlet />;
 };
 
-// --------------------
 // Layout
-// --------------------
 const MainLayout = () => (
   <div className="flex min-h-screen flex-col bg-slate-50">
     <ScrollToTop />
 
-    {/* Skip link improves keyboard accessibility. [web:55] */}
     <a
       href="#main-content"
       className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-xl focus:bg-indigo-600 focus:px-4 focus:py-2 focus:text-sm focus:font-extrabold focus:text-white"
@@ -157,6 +151,9 @@ const MainLayout = () => (
     </main>
 
     <Footer />
+
+    {/* Toast container should be inside layout, not inside <Routes> children */}
+    <ToastContainer />
   </div>
 );
 
@@ -184,7 +181,7 @@ function App() {
           <Route key={r.path} path={r.path} element={r.element} />
         ))}
 
-        {/* Separate auth utility pages (public) */}
+        {/* Public auth utility pages */}
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
 
