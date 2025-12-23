@@ -9,62 +9,60 @@ const crypto = require("crypto");
 
 const { CONFIG } = require("./config");
 const attachRoutes = require("./routes");
-
 const { apiLimiter } = require("../middleware/rate/rateLimiter.middleware");
 const { errorHandler, notFound } = require("../middleware");
 const logger = require("../utils/logging/logger");
-
 const roleRoutes = require("../routes/role/roleRoutes");
 const permissionRoutes = require("../routes/role/permissionRoutes");
 
 const UPLOADS_ROOT = path.resolve(process.cwd(), "uploads");
 
 function ensureUploadsDir() {
-  fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
+  if (!fs.existsSync(UPLOADS_ROOT)) {
+    fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
+    logger.info(`Created uploads directory: ${UPLOADS_ROOT}`);
+  }
 }
 
-function parseCsvEnv(name) {
-  const raw = process.env[name];
-  if (!raw) return [];
-  return raw
+function parseAllowedOrigins() {
+  const rawOrigins = process.env.ALLOWED_ORIGINS || "";
+  const origins = rawOrigins
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-}
 
-function buildAllowedOrigins() {
-  const allowed = parseCsvEnv("ALLOWED_ORIGINS");
-
-  // In production, fail fast if you forgot to configure CORS.
-  if (CONFIG.IS_PRODUCTION && allowed.length === 0) {
+  if (CONFIG.IS_PRODUCTION && origins.length === 0) {
     throw new Error(
-      "ALLOWED_ORIGINS is required in production (comma-separated list of allowed origins)"
+      "ALLOWED_ORIGINS environment variable is required in production"
     );
   }
 
-  // Note: If you use cookies (credentials: true), do NOT use "*" (not compatible).
-  if (allowed.includes("*")) {
-    logger.warn("ALLOWED_ORIGINS contains '*'. This is unsafe for auth APIs.");
+  if (origins.includes("*") && CONFIG.IS_PRODUCTION) {
+    throw new Error(
+      "Wildcard (*) origin is not allowed in production with credentials"
+    );
   }
 
-  return allowed;
+  return origins;
 }
 
-function createCorsOptions() {
-  const allowed = buildAllowedOrigins();
+function configureCors() {
+  const allowedOrigins = parseAllowedOrigins();
 
   return {
-    origin: (origin, cb) => {
-      // Non-browser clients often send no Origin header.
-      if (!origin) return cb(null, true);
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes("*")) {
+        return callback(null, true);
+      }
 
-      // If you really want wildcard support, keep it explicit.
-      if (allowed.includes("*")) return cb(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
 
-      if (allowed.includes(origin)) return cb(null, true);
-
-      logger.warn(`CORS blocked: ${origin}`);
-      return cb(new Error(`CORS policy violation: ${origin} not allowed`));
+      logger.warn(`CORS blocked origin: ${origin}`);
+      return callback(
+        new Error(`Origin ${origin} is not allowed by CORS policy`)
+      );
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -78,10 +76,11 @@ function createCorsOptions() {
     ],
     exposedHeaders: ["Content-Range", "X-Content-Range", "X-Request-Id"],
     maxAge: 86400,
+    optionsSuccessStatus: 204,
   };
 }
 
-function createHelmetOptions() {
+function configureHelmet() {
   return {
     contentSecurityPolicy: {
       directives: {
@@ -97,154 +96,194 @@ function createHelmetOptions() {
       },
     },
     crossOriginEmbedderPolicy: false,
-    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
     crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
     frameguard: { action: "deny" },
     hidePoweredBy: true,
     hsts: CONFIG.IS_PRODUCTION
-      ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+      ? {
+          maxAge: 31536000,
+          includeSubDomains: true,
+          preload: true,
+        }
       : false,
     noSniff: true,
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    xssFilter: true,
   };
 }
 
-function requestId() {
-  return (req, res, next) => {
-    const rid =
-      typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+function attachRequestId(req, res, next) {
+  const requestId =
+    typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 
-    req.id = `req_${rid}`;
-    res.setHeader("X-Request-Id", req.id);
-    next();
-  };
+  req.id = `req_${requestId}`;
+  res.setHeader("X-Request-Id", req.id);
+  next();
 }
 
-function requestTimeout() {
-  return (req, res, next) => {
-    req.setTimeout(CONFIG.REQUEST_TIMEOUT, () => {
-      logger.error(`Request timeout: ${req.method} ${req.originalUrl}`);
-      if (!res.headersSent) {
-        res.status(408).json({
-          success: false,
-          message: "Request timeout",
-          code: "REQUEST_TIMEOUT",
-          requestId: req.id,
-        });
+function attachRequestTimeout(req, res, next) {
+  const timeout = CONFIG.REQUEST_TIMEOUT || 30000;
+
+  req.setTimeout(timeout, () => {
+    logger.error(`Request timeout: ${req.method} ${req.originalUrl}`);
+    if (!res.headersSent) {
+      res.status(408).json({
+        success: false,
+        message: "Request timeout",
+        code: "REQUEST_TIMEOUT",
+        requestId: req.id,
+      });
+    }
+  });
+  next();
+}
+
+function monitorSlowRequests(req, res, next) {
+  const startTime = Date.now();
+
+  res.on("finish", () => {
+    const duration = Date.now() - startTime;
+    const slowThreshold = 3000;
+    const criticalThreshold = 5000;
+
+    if (duration > criticalThreshold) {
+      logger.error(
+        `Critical slow request: ${req.method} ${req.originalUrl} - ${duration}ms`,
+        { requestId: req.id, duration, method: req.method, url: req.originalUrl }
+      );
+    } else if (duration > slowThreshold) {
+      logger.warn(
+        `Slow request: ${req.method} ${req.originalUrl} - ${duration}ms`,
+        { requestId: req.id, duration }
+      );
+    }
+  });
+
+  next();
+}
+
+function trimRequestBody(req, res, next) {
+  if (req.body && typeof req.body === "object") {
+    Object.keys(req.body).forEach((key) => {
+      if (typeof req.body[key] === "string") {
+        req.body[key] = req.body[key].trim();
       }
     });
-    next();
-  };
+  }
+  next();
 }
 
-function slowRequestMonitor() {
-  return (req, res, next) => {
-    const start = Date.now();
-    res.on("finish", () => {
-      const ms = Date.now() - start;
-      if (ms > 5000)
-        logger.error(`Very slow: ${req.method} ${req.originalUrl} - ${ms}ms`);
-      else if (ms > 3000)
-        logger.warn(`Slow: ${req.method} ${req.originalUrl} - ${ms}ms`);
-    });
-    next();
-  };
-}
+function configureLogger() {
+  if (CONFIG.IS_DEVELOPMENT) {
+    return morgan("dev");
+  }
 
-function trimBodyStrings() {
-  return (req, _res, next) => {
-    if (!req.body || typeof req.body !== "object") return next();
-    for (const k of Object.keys(req.body)) {
-      if (typeof req.body[k] === "string") req.body[k] = req.body[k].trim();
-    }
-    next();
-  };
-}
-
-function httpLogger() {
-  if (CONFIG.IS_DEVELOPMENT) return morgan("dev");
   return morgan("combined", {
-    stream: logger.stream,
+    stream: {
+      write: (message) => logger.info(message.trim()),
+    },
     skip: (req) => req.url === "/api/health" || req.url === "/",
   });
 }
 
-function mountUploads(app) {
+function setupStaticUploads(app) {
   ensureUploadsDir();
-  app.use(
-    "/uploads",
-    express.static(UPLOADS_ROOT, {
-      maxAge: CONFIG.IS_PRODUCTION ? CONFIG.CACHE_MAX_AGE : 0,
-      etag: true,
-      lastModified: true,
-      setHeaders: (res) => {
-        res.setHeader("X-Content-Type-Options", "nosniff");
-        if (!CONFIG.IS_PRODUCTION) res.setHeader("Cache-Control", "no-store");
-      },
-    })
-  );
+
+  const staticOptions = {
+    maxAge: CONFIG.IS_PRODUCTION ? CONFIG.CACHE_MAX_AGE || 86400000 : 0,
+    etag: true,
+    lastModified: true,
+    setHeaders: (res, filePath) => {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+
+      if (!CONFIG.IS_PRODUCTION) {
+        res.setHeader("Cache-Control", "no-store");
+      }
+    },
+  };
+
+  app.use("/uploads", express.static(UPLOADS_ROOT, staticOptions));
+  logger.info(`Static uploads directory mounted at /uploads`);
 }
 
-function buildExpressApp() {
-  const app = express();
-
-  // Keep this only if you're actually behind a reverse proxy (Nginx/Render/Heroku/etc).
-  app.set("trust proxy", 1);
-  app.disable("x-powered-by");
-  app.set("etag", false);
-
-  app.use(helmet(createHelmetOptions()));
-  app.use(cors(createCorsOptions()));
-
-  app.use(
-    compression({
-      filter: (req, res) =>
-        req.headers["x-no-compression"] ? false : compression.filter(req, res),
-      level: CONFIG.COMPRESSION_LEVEL,
-      threshold: 1024,
-    })
-  );
-
-  app.use(express.json({ limit: CONFIG.MAX_FILE_SIZE }));
-  app.use(express.urlencoded({ limit: CONFIG.MAX_FILE_SIZE, extended: true }));
-
-  app.use(httpLogger());
-  app.use(requestId());
-  app.use(requestTimeout());
-  app.use(slowRequestMonitor());
-  app.use(trimBodyStrings());
-
-  mountUploads(app);
-
-  app.get("/", (_req, res) => {
+function registerHealthChecks(app) {
+  app.get("/", (req, res) => {
     res.status(200).json({
       success: true,
       message: "Backend API is running",
       service: "Complaint Management System",
-      version: CONFIG.API_VERSION,
+      version: CONFIG.API_VERSION || "1.0.0",
       environment: CONFIG.NODE_ENV,
       timestamp: new Date().toISOString(),
     });
   });
 
-  app.head("/", (_req, res) => res.status(200).end());
+  app.head("/", (req, res) => res.status(200).end());
 
-  app.get("/api/health", (_req, res) => {
+  app.get("/api/health", (req, res) => {
     res.status(200).json({
       success: true,
-      message: "API is healthy",
-      uptime: process.uptime(),
+      status: "healthy",
+      uptime: Math.floor(process.uptime()),
       timestamp: new Date().toISOString(),
+      memory: {
+        heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+      },
     });
   });
+}
 
+function registerRoutes(app) {
   app.use("/api", apiLimiter);
-
   app.use("/api/roles", roleRoutes);
   app.use("/api/permissions", permissionRoutes);
   attachRoutes(app);
+}
+
+function buildExpressApp() {
+  const app = express();
+
+  app.set("trust proxy", 1);
+  app.disable("x-powered-by");
+  app.set("etag", false);
+  app.set("json spaces", CONFIG.IS_PRODUCTION ? 0 : 2);
+
+  app.use(helmet(configureHelmet()));
+  app.use(cors(configureCors()));
+  app.options("*", cors(configureCors()));
+
+  app.use(
+    compression({
+      filter: (req, res) => {
+        if (req.headers["x-no-compression"]) {
+          return false;
+        }
+        return compression.filter(req, res);
+      },
+      level: CONFIG.COMPRESSION_LEVEL || 6,
+      threshold: 1024,
+    })
+  );
+
+  const jsonLimit = CONFIG.MAX_FILE_SIZE || "10mb";
+  app.use(express.json({ limit: jsonLimit }));
+  app.use(express.urlencoded({ limit: jsonLimit, extended: true }));
+
+  app.use(configureLogger());
+  app.use(attachRequestId);
+  app.use(attachRequestTimeout);
+  app.use(monitorSlowRequests);
+  app.use(trimRequestBody);
+
+  setupStaticUploads(app);
+  registerHealthChecks(app);
+  registerRoutes(app);
 
   app.use(notFound);
   app.use(errorHandler);
