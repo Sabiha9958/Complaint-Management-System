@@ -1,3 +1,5 @@
+const { URL } = require("node:url");
+
 const connectDB = require("../config/db");
 const logger = require("../utils/logging/logger");
 
@@ -10,78 +12,127 @@ const buildExpressApp = require("./app");
 const createServerWithWebSocket = require("./websocket");
 const gracefulShutdown = require("./shutdown");
 
-function buildPublicUrls() {
-  const httpBase =
-    (CONFIG.BASE_URL && CONFIG.BASE_URL.trim()) ||
-    `http://localhost:${CONFIG.PORT}`;
+const SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR2"];
 
-  const apiUrl = `${httpBase}/api`;
+const clean = (v) =>
+  String(v ?? "")
+    .trim()
+    .replace(/\/+$/, "");
 
-  // Prefer explicit WS public URL in production; fallback derives ws/wss from BASE_URL.
-  const wsUrl =
-    (process.env.WS_PUBLIC_URL && process.env.WS_PUBLIC_URL.trim()) ||
-    `${httpBase
-      .replace(/^http:/, "ws:")
-      .replace(/^https:/, "wss:")}/ws/complaints`;
-
-  return { httpBase, apiUrl, wsUrl };
+function toError(value) {
+  if (value instanceof Error) return value;
+  return new Error(typeof value === "string" ? value : JSON.stringify(value));
 }
 
-async function startServer() {
-  // 1) Validate + setup (fail fast)
-  validateEnvironment();
-  createUploadDirectories();
+function parseHttpOrigin(origin) {
+  const value = clean(origin);
+  if (!value) return null;
 
-  // 2) Build app + server (but don't listen yet)
-  const app = buildExpressApp();
-  const { server, wss, broadcastComplaint } = createServerWithWebSocket(app);
+  const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      "PUBLIC_ORIGIN/BASE_URL must start with http:// or https://"
+    );
+  }
 
-  // 3) Single shutdown function (guarded)
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url;
+}
+
+function buildPublicUrls() {
+  const originUrl =
+    parseHttpOrigin(CONFIG.PUBLIC_ORIGIN) ||
+    parseHttpOrigin(process.env.PUBLIC_ORIGIN) ||
+    parseHttpOrigin(CONFIG.BASE_URL) ||
+    parseHttpOrigin(process.env.BASE_URL);
+
+  if (!originUrl && CONFIG.NODE_ENV === "production") {
+    throw new Error("Missing PUBLIC_ORIGIN (or BASE_URL) in production");
+  }
+
+  const origin = originUrl ? clean(originUrl.toString()) : null;
+
+  const apiUrl = originUrl
+    ? clean(new URL("/api", originUrl).toString())
+    : "/api";
+
+  const wsExplicit = clean(process.env.WS_PUBLIC_URL);
+  const wsUrl = wsExplicit
+    ? wsExplicit
+    : originUrl
+    ? (() => {
+        const ws = new URL(originUrl.toString());
+        ws.protocol = ws.protocol === "https:" ? "wss:" : "ws:";
+        ws.pathname = "/ws/complaints";
+        ws.search = "";
+        ws.hash = "";
+        return clean(ws.toString());
+      })()
+    : "/ws/complaints";
+
+  return { origin, apiUrl, wsUrl };
+}
+
+function createShutdownOnce(server, wss) {
   let shuttingDown = false;
-  const shutdownOnce = (reason, err) => {
+
+  return (reason, err) => {
     if (shuttingDown) return;
     shuttingDown = true;
 
     if (err) {
-      logger.error(`💥 ${reason}`, {
+      logger.error(`Shutdown: ${reason}`, {
         message: err?.message || String(err),
         stack: err?.stack,
       });
     } else {
-      logger.warn(`🛑 Shutdown requested: ${reason}`);
+      logger.warn(`Shutdown requested: ${reason}`);
     }
 
-    // Delegate to your existing shutdown module
     gracefulShutdown(reason, server, wss);
   };
+}
 
-  // 4) Process-level handlers
-  ["SIGTERM", "SIGINT", "SIGUSR2"].forEach((sig) => {
-    process.once(sig, () => shutdownOnce(sig));
-  });
-
+function registerProcessHandlers(shutdownOnce) {
+  SIGNALS.forEach((sig) => process.once(sig, () => shutdownOnce(sig)));
   process.once("uncaughtException", (err) =>
     shutdownOnce("uncaughtException", err)
   );
   process.once("unhandledRejection", (reason) =>
-    shutdownOnce("unhandledRejection", reason)
+    shutdownOnce("unhandledRejection", toError(reason))
   );
+}
+
+function listenAsync(server, port, host) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, resolve);
+  });
+}
+
+async function startServer() {
+  validateEnvironment();
+  createUploadDirectories();
+
+  const app = buildExpressApp();
+  const { server, wss, broadcastComplaint } = createServerWithWebSocket(app);
+
+  const shutdownOnce = createShutdownOnce(server, wss);
+  registerProcessHandlers(shutdownOnce);
 
   try {
-    // 5) Connect DB first
     await connectDB();
+    await listenAsync(server, CONFIG.PORT, CONFIG.HOST);
 
-    // 6) Start listening
-    await new Promise((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(CONFIG.PORT, resolve);
-    });
+    const { origin, apiUrl, wsUrl } = buildPublicUrls();
 
-    const { apiUrl, wsUrl } = buildPublicUrls();
-
-    logger.info(`🚀 Server started`, {
+    logger.info("Server started", {
       port: CONFIG.PORT,
+      host: CONFIG.HOST,
       env: CONFIG.NODE_ENV,
+      publicOrigin: origin,
       api: apiUrl,
       websocket: wsUrl,
     });
@@ -89,7 +140,6 @@ async function startServer() {
     return { app, server, wss, broadcastComplaint };
   } catch (err) {
     shutdownOnce("startup_failed", err);
-    // If gracefulShutdown doesn’t exit, ensure the process ends with a failure code.
     process.exitCode = 1;
     throw err;
   }
